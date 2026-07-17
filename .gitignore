@@ -1,0 +1,66 @@
+# =====================================================================
+#  .gitignore — Relógio VFD (PIC16C745)
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# Datasheets / documentação proprietária
+# ---------------------------------------------------------------------
+# O datasheet do display IEE 036X2 é marcado como PROPRIETÁRIO e não
+# pode ser redistribuído; os demais PDFs (Sensirion, Maxim, Microchip)
+# são de livre distribuição, mas ficam de fora do repositório por
+# organização. O README lista os links oficiais para baixá-los.
+DOCS/
+
+# ---------------------------------------------------------------------
+# MPLAB X — artefatos de compilação e arquivos por máquina
+# ---------------------------------------------------------------------
+build/
+dist/
+# Estado do IDE por usuário (dispositivo/toolchain selecionados etc.)
+**/nbproject/private/
+# Contém caminhos ABSOLUTOS do compilador nesta máquina (D:\...);
+# o MPLAB X regenera ao abrir o projeto.
+**/nbproject/Makefile-local-*.mk
+**/nbproject/Makefile-genesis.properties
+
+# Saídas de build soltas (por segurança, caso alguém compile fora de build/)
+*.p1
+*.d
+*.pre
+*.hex
+*.elf
+*.map
+*.sym
+*.lst
+*.cof
+*.o
+*.obj
+*.sdb
+funclist
+*.rlf
+*.sdb
+
+# ---------------------------------------------------------------------
+# Proteus (simulação em HARDWARE/)
+# ---------------------------------------------------------------------
+HARDWARE/Project Backups/
+*.pdsbak
+*.pwi
+# Arquivo de workspace/janelas é pessoal (posição das janelas etc.)
+*.pdsprj.*.workspace
+
+# ---------------------------------------------------------------------
+# Python (DTCAPP/)
+# ---------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ---------------------------------------------------------------------
+# Sistema operacional / editores
+# ---------------------------------------------------------------------
+Thumbs.db
+Desktop.ini
+.DS_Store
+.vscode/
