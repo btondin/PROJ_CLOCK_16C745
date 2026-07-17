@@ -1,0 +1,17 @@
+# Normaliza finais de linha: LF no repositório, nativo no checkout.
+* text=auto
+
+# Fontes e texto — sempre LF no repositório
+*.c   text
+*.h   text
+*.py  text
+*.md  text
+*.mk  text
+*.xml text
+Makefile text
+
+# Binários — nunca normalizar
+*.pdf     binary
+*.pdsprj  binary
+*.hex     binary
+*.HEX     binary
