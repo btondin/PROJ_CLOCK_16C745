@@ -287,6 +287,37 @@ static bool acerto_valido(const uint8_t a[USB_TAM_REPORT])
  * ------------------------------------------------------------------ */
 void main(void)
 {
+    /* ================================================================
+     *  TESTE DE BRING-UP (heartbeat de LED) — REMOVER PARA USO NORMAL
+     * ----------------------------------------------------------------
+     *  Pisca um LED a 1 Hz e NÃO avança para o restante do programa.
+     *  Serve para confirmar na protoboard que o PIC está "vivo": se o
+     *  LED pisca a ~1 Hz, então o cristal de 6 MHz + PLL 4x (= 24 MHz),
+     *  a alimentação e o reset estão OK. Se ficar apagado, aceso fixo,
+     *  ou piscar em ritmo errado, o problema está no clock/alimentação
+     *  (o período do pisca vem direto do relógio de instruções).
+     *
+     *  LED:  RC0 (pino 11) ──►|──[ ~330 Ω ]── GND   (acende em nível 1)
+     *
+     *  Para voltar à operação normal do relógio, basta APAGAR este
+     *  bloco (o resto do código permanece inalterado).
+     *
+     *  NOTA: o laço é guardado por uma flag 'volatile' sempre igual a 1
+     *  (ou seja, é um while(1) que nunca sai) em vez de um "while(1)"
+     *  literal DE PROPÓSITO: assim o compilador não trata o resto do
+     *  main como código morto, preserva a sobreposição de RAM das
+     *  variáveis locais e o binário continua cabendo no BANK0.
+     * ================================================================ */
+    static volatile uint8_t heartbeat_ligado = 1u;
+
+    TRISCbits.TRISC0 = 0;            /* RC0 como saída digital          */
+    while (heartbeat_ligado) {       /* sempre verdadeiro = while(1)    */
+        PORTCbits.RC0 = 1;           /* LED aceso                       */
+        __delay_ms(500);             /* 500 ms                          */
+        PORTCbits.RC0 = 0;           /* LED apagado                     */
+        __delay_ms(500);             /* 500 ms  → período 1 s = 1 Hz    */
+    }
+
     uint8_t seg_anterior   = 0xFFu;  /* força 1º redesenho            */
     uint8_t cont_tela      = 0;      /* segundos na tela corrente     */
     bool    mostrando_hora = true;   /* qual tela está ativa          */
