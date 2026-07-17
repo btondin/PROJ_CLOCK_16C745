@@ -4,7 +4,7 @@
  * =====================================================================
  *  Projeto : VFDCLK — Relógio/termo-higrômetro com display VFD 20x2
  *  MCU     : PIC16C745 (28 pinos, USB 1.1 low-speed nativo)
- *  Clock   : cristal de 6 MHz + PLL 4x interno = 24 MHz (FOSC = H4)
+ *  Clock   : cristal de 24 MHz em modo HS, sem PLL (FOSC = HS)
  *            -> ciclo de instrução = 24 MHz / 4 = 6 MHz (166,7 ns)
  *  Compilador: MPLAB XC8 (modo C99)
  *
@@ -16,16 +16,17 @@
  *  ------------------------------------------------------------------
  *   Pino  Nome        Função no projeto
  *   ----  ----------  ------------------------------------------------
- *    9    OSC1        cristal 6 MHz
- *    10   OSC2        cristal 6 MHz
+ *    9    OSC1        cristal 24 MHz
+ *    10   OSC2        cristal 24 MHz
  *    14   VUSB        saída do regulador 3,3 V interno do USB
  *                     (capacitor de desacoplamento + resistor de
  *                      1k5 de VUSB para D- = identificação low-speed)
  *    15   RC4/D-      USB D-  (dedicado, não é GPIO neste projeto)
  *    16   RC5/D+      USB D+  (dedicado)
  *    17   RC6/TX      TX do USART -> entrada serial do VFD (J1-14)
- *                     ATENÇÃO: através de inversor NPN de 1 transistor
- *                     (polaridade do VFD: repouso/mark = 0 V).
+ *                     ATENÇÃO: através de um MAX232 (T1IN -> T1OUT), que
+ *                     converte TTL<->EIA-232 e inverte a polaridade
+ *                     (o VFD repousa em mark = tensão negativa).
  *    21   RB0         SDA do DS3231 (open-drain via TRIS, pull-up 4k7)
  *    22   RB1         SCL do DS3231 (push-pull via sombra de PORTB)
  *    23   RB2         DATA do SHT15 (open-drain via TRIS, pull-up 10k)
@@ -55,7 +56,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-/* Frequência do oscilador do CPU (após PLL) — usada por __delay_ms/us */
+/* Frequência do oscilador do CPU (24 MHz) — usada por __delay_ms/us   */
 #define _XTAL_FREQ  24000000UL
 
 /* ------------------------------------------------------------------

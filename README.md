@@ -68,18 +68,18 @@ Resumo dos periféricos (detalhes, valores de componentes e esquemático em
 
 | Bloco        | Pinos do PIC        | Observação                              |
 |--------------|---------------------|-----------------------------------------|
-| Display VFD  | RC6/TX (17)         | serial 9600, **via inversor NPN**       |
+| Display VFD  | RC6/TX (17)         | serial 9600 8N1, **via MAX232**         |
 | RTC DS3231   | RB0/SDA, RB1/SCL    | I²C por software, pull-ups 4,7 kΩ        |
 | Sensor SHT15 | RB2/DATA, RB3/SCK   | Sensibus, pull-up 10 kΩ em DATA          |
 | USB          | RC4/D-, RC5/D+, VUSB | low-speed, 1,5 kΩ de VUSB para D-        |
-| Clock        | OSC1/OSC2 (9/10)    | cristal 6 MHz + PLL 4× = 24 MHz          |
+| Clock        | OSC1/OSC2 (9/10)    | cristal 24 MHz (HS, sem PLL)             |
 
 ⚠️ **Ponto de atenção — serial do display:** o VFD espera a linha em
 repouso no nível **baixo** (mark, padrão EIA-232), enquanto a UART do PIC
-repousa em nível **alto**. Um inversor de **1 transistor** entre RC6 e a
-entrada do display acerta a polaridade e entrega 0/5 V (dispensa MAX232).
-A explicação completa e o teste para ligação direta estão no documento de
-hardware.
+repousa em nível **alto**. Um **MAX232** entre RC6 (T1IN) e a entrada do
+display (T1OUT) faz as duas coisas: converte TTL ↔ EIA-232 e inverte a
+polaridade. O esquemático completo (canal, capacitores e jumpers do
+display) está no documento de hardware.
 
 ---
 
@@ -117,7 +117,7 @@ make            # usa os Makefiles do projeto + XC8
 O PIC16C745 é **OTP** (memória EPROM). Para desenvolvimento, use a versão
 **/JW** (com janela de quartzo, apagável por UV) e um gravador compatível
 (ex.: PICSTART/PICkit com adaptador). Grave o `.hex` gerado acima. Os bits
-de configuração já vão embutidos (`FOSC=H4, WDTE=OFF, PWRTE=ON, CP=OFF`).
+de configuração já vão embutidos (`FOSC=HS, WDTE=OFF, PWRTE=ON, CP=OFF`).
 
 ---
 

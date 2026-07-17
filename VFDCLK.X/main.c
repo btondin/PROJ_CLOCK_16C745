@@ -20,8 +20,8 @@
  *   fora do tick, verifica se chegou acerto de hora pelo USB.
  *
  *  Bits de configuração (datasheet DS41124D, seção 12.1):
- *   FOSC=H4 -> cristal HS de 6 MHz com PLL 4x = 24 MHz (obrigatório
- *              para o USB low-speed); WDT desligado; PWRT ligado.
+ *   FOSC=HS -> cristal HS de 24 MHz direto, sem PLL (o USB low-speed
+ *              exige exatamente 24 MHz); WDT desligado; PWRT ligado.
  * =====================================================================
  */
 #include <xc.h>
@@ -39,7 +39,7 @@
 /* ------------------------------------------------------------------
  * Bits de configuração (gravados junto com o programa)
  * ------------------------------------------------------------------ */
-#pragma config FOSC  = H4    /* cristal 6 MHz + PLL 4x = 24 MHz       */
+#pragma config FOSC  = HS    /* cristal de 24 MHz (HS, sem PLL)       */
 #pragma config WDTE  = OFF   /* watchdog desligado                    */
 #pragma config PWRTE = ON    /* power-up timer: alimentação estável   */
 #pragma config CP    = OFF   /* sem proteção de código                */
@@ -292,7 +292,7 @@ void main(void)
      * ----------------------------------------------------------------
      *  Pisca um LED a 1 Hz e NÃO avança para o restante do programa.
      *  Serve para confirmar na protoboard que o PIC está "vivo": se o
-     *  LED pisca a ~1 Hz, então o cristal de 6 MHz + PLL 4x (= 24 MHz),
+     *  LED pisca a ~1 Hz, então o cristal de 24 MHz (modo HS),
      *  a alimentação e o reset estão OK. Se ficar apagado, aceso fixo,
      *  ou piscar em ritmo errado, o problema está no clock/alimentação
      *  (o período do pisca vem direto do relógio de instruções).

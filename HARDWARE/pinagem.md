@@ -24,7 +24,7 @@ contra o arquivo de definição oficial do dispositivo (Microchip DFP
       OSC1/CLKIN  9 ┤   ── xtal     ├ 20  VDD   (+5 V)
      OSC2/CLKOUT 10 ┤   ── xtal     ├ 19  VSS   (GND)
    RC0/T1OSO     11 ┤               ├ 18  RC7/RX/DT
-   RC1/T1OSI     12 ┤               ├ 17  RC6/TX ── serial p/ VFD (via inversor)
+   RC1/T1OSI     12 ┤               ├ 17  RC6/TX ── serial p/ VFD (via MAX232)
       RC2/CCP1   13 ┤               ├ 16  RC5/D+ ── USB D+
            VUSB  14 ┤               ├ 15  RC4/D- ── USB D-
                     └───────────────┘
@@ -34,12 +34,12 @@ contra o arquivo de definição oficial do dispositivo (Microchip DFP
 |-----:|--------------|-------------------------------------------------------|
 |   1  | MCLR/VPP     | Pull-up 10 kΩ para +5 V (+ conector ICSP p/ gravar)   |
 |   8  | VSS          | GND                                                   |
-|   9  | OSC1         | Cristal 6 MHz + 15–22 pF para GND                     |
-|  10  | OSC2         | Cristal 6 MHz + 15–22 pF para GND                     |
+|   9  | OSC1         | Cristal 24 MHz + 15–22 pF para GND                     |
+|  10  | OSC2         | Cristal 24 MHz + 15–22 pF para GND                     |
 |  14  | VUSB         | Capacitor de 0,22 µF para GND; **1,5 kΩ p/ D‑ (pino 15)** |
 |  15  | RC4/D-       | USB D- (verde)                                        |
 |  16  | RC5/D+       | USB D+ (branco)                                       |
-|  17  | RC6/TX       | Entrada serial do VFD (J1-14) **através do inversor**  |
+|  17  | RC6/TX       | Entrada serial do VFD (J1-14) **via MAX232** (T1IN, pino 11)  |
 |  19  | VSS          | GND                                                   |
 |  20  | VDD          | +5 V                                                  |
 |  21  | RB0/SDA      | SDA do DS3231 (pull-up 4,7 kΩ para +5 V)              |
@@ -56,9 +56,9 @@ Os pinos RB4, RB5 e o restante ficam livres.
 
 - **+5 V / GND**: VDD no pino 20, VSS nos pinos 8 e 19 (ligar ambos!).
   Capacitor de desacoplamento de 100 nF junto a cada par VDD/VSS.
-- **Cristal**: 6 MHz entre OSC1 (9) e OSC2 (10), com dois capacitores de
-  carga (15–22 pF) de cada pino para GND. O PLL 4× interno multiplica
-  para os 24 MHz exigidos pelo USB (bit de configuração `FOSC = H4`).
+- **Cristal**: 24 MHz entre OSC1 (9) e OSC2 (10), com dois capacitores de
+  carga (15–22 pF) de cada pino para GND, em modo HS (bit de configuração
+  `FOSC = HS`). Os 24 MHz são exigidos diretamente pelo USB (sem PLL).
   Não use ressonador de baixa precisão: o USB exige ±0,25 % de tolerância.
 
 ---
@@ -93,56 +93,50 @@ O PIC16C745 tem transceptor e regulador de 3,3 V embutidos.
 ## 4. Serial para o display VFD (o ponto que exige atenção)
 
 O display **IEE 036X2** é usado em **modo serial** (9600 8N1). Ajuste os
-jumpers de "personalidade" da placa do display para **SERIAL** e
-**9600 baud** (seção 3.2.3 do datasheet do display; sem jumper, o padrão
-já é 9600).
+jumpers de "personalidade" da placa do display para **9600 baud** e
+partida **NORM**, mantendo o **conjunto de comandos nativo (Intel, que é o
+padrão)** — **não** selecione o modo **LCD** (ele troca os comandos para os
+do HD44780, e o firmware usa os códigos nativos IEE). Seção 3.2.3 do
+datasheet do display.
 
-### Polaridade — por que há um inversor
+### Por que um MAX232 (conversão de nível + inversão de polaridade)
 
 O datasheet do display (seção 3.2.2.1) especifica a entrada serial em
-níveis **EIA-232**:
+níveis **EIA-232**, com a linha em **repouso no nível baixo (mark)**:
 
 | Nível lógico              | Tensão EIA-232 | Estado de repouso |
 |---------------------------|----------------|-------------------|
 | space (logic 0 / start)   | +3 a +15 V     |                   |
 | mark  (logic 1 / idle)    | −3 a −15 V     | **repouso = mark**|
 
-Ou seja, o display espera a linha em **repouso no nível baixo** (mark).
-A UART do PIC (RC6/TX) faz o contrário: fica em **repouso no nível alto**
-(idle = 5 V) e o PIC16C745 **não** tem inversão por hardware. Por isso,
-um **inversor de 1 transistor** entre RC6 e a entrada do display resolve
-a polaridade *e* já entrega os níveis de 0/5 V que o receptor aceita
-(limiar em ~+1,5 V; não é preciso ±12 V nem MAX232):
+A UART do PIC (RC6/TX) faz o oposto: repousa em **nível alto** (idle = 5 V)
+e o PIC16C745 **não** inverte por hardware. O **MAX232 resolve as duas
+coisas ao mesmo tempo**, pois é um driver **inversor** *e* conversor de
+nível:
+
+- converte TTL (0/5 V) → EIA-232 real (±~8 V); e
+- inverte a polaridade que o display espera:
+  - RC6 em repouso **alto** (mark)  → T1OUT **negativo** = mark ✔
+  - RC6 em **start** baixo (space)  → T1OUT **positivo** = space ✔
+
+Como só transmitimos para o display, usa-se **um único canal (T1)**:
 
 ```
-        +5 V
-         │
-        ┌┴┐ 4,7 kΩ  (pull-up do coletor)
-        └┬┘
-         ├──────────────► J1-14  (SERIAL INPUT do VFD)
-         │
-   RC6 ──┤ 4,7 kΩ ├──┐    ┌C
-  (TX)   └─────────┘  └──B┤ NPN (ex.: BC547, 2N3904)
-                          └E
-                           │
-                          GND
+   PIC RC6/TX (17) ──► T1IN (11)   MAX232   T1OUT (14) ──► J1-14 (SERIAL INPUT do VFD)
+                       VCC (16) = +5 V      GND (15) = GND comum (PIC + display)
+
+   Capacitores de charge-pump — 0,1 µF cerâmicos (SP232A / MAX232A):
+     C1: pino 1 (C1+) ↔ pino 3 (C1−)       C2: pino 4 (C2+) ↔ pino 5 (C2−)
+     V+ (pino 2) ── C ── GND               V− (pino 6) ── C ── GND
+     + 100 nF de VCC (16) para GND (desacoplamento)
+   Os canais R1/R2/T2 do MAX232 ficam sem uso. Confira os valores exatos
+   dos capacitores no datasheet do seu MAX232.
 ```
 
-- RC6 em **repouso alto** → transistor **conduz** → coletor em **0 V** →
-  display lê **mark** (repouso correto). ✔
-- RC6 em **start (baixo)** → transistor **corta** → coletor em **5 V** →
-  display lê **space** (bit de start). ✔
-
-O firmware (`uart.c`) transmite UART padrão; a inversão é 100 % em
-hardware e transparente para o código.
-
-### E se o seu display aceitar TTL direto?
-
-Alguns exemplares/modos aceitam UART TTL com **repouso alto** diretamente
-(sem inversor). Procedimento de teste: ligue RC6 direto em J1-14 e rode o
-firmware; se aparecer texto correto, ótimo — o inversor é dispensável. Se
-aparecer lixo ou nada, use o inversor acima (opção alinhada ao datasheet).
-GND do PIC e GND do display **sempre** em comum.
+- O firmware (`uart.c`) transmite UART padrão: toda a conversão de nível e
+  a inversão de polaridade acontecem no MAX232, de forma transparente ao
+  código.
+- GND do PIC, do MAX232 e do display **sempre** em comum.
 
 ---
 
@@ -181,10 +175,10 @@ Coloque 100 nF entre VDD e GND do sensor, bem próximo dele.
 | 1   | Display VFD IEE 036X2 (20×2)         | jumpers em SERIAL / 9600           |
 | 1   | DS3231 (módulo com bateria)          | RTC I²C                            |
 | 1   | Sensirion SHT15                      | sensor T/RH                        |
-| 1   | Cristal 6 MHz + 2× 15–22 pF          | clock do USB                       |
-| 1   | Transistor NPN (BC547/2N3904)        | inversor da serial                 |
+| 1   | Cristal 24 MHz + 2× 15–22 pF         | clock do USB                       |
+| 1   | SP232ACP (Sipex; equiv. MAX232A)     | conversor de nível serial TTL↔EIA-232 |
+| 5   | Capacitor 0,1 µF cerâmico            | charge-pump do SP232ACP            |
 | 2   | Resistor 4,7 kΩ                      | pull-ups I²C                       |
-| 2   | Resistor 4,7 kΩ                      | inversor (base + coletor)          |
 | 1   | Resistor 10 kΩ                       | pull-up DATA do SHT15              |
 | 1   | Resistor 10 kΩ                       | pull-up de MCLR                    |
 | 1   | Resistor 1,5 kΩ                      | identificação USB low-speed        |

@@ -10,9 +10,9 @@
  *      Baud real = 24 MHz / (16 * 156) = 9615 (erro de +0,16%, ok)
  *
  *  O sinal TX (RC6) idle em nível ALTO (mark UART padrão). O display
- *  VFD espera polaridade EIA-232 (repouso = mark = tensão baixa), por
- *  isso o hardware usa um inversor de 1 transistor NPN entre RC6 e a
- *  entrada serial J1-14 do display — ver HARDWARE/pinagem.md.
+ *  VFD espera níveis e polaridade EIA-232 (repouso = mark = tensão
+ *  negativa), por isso o hardware usa um MAX232 entre RC6 (T1IN) e a
+ *  entrada serial J1-14 do display (T1OUT) — ver HARDWARE/pinagem.md.
  *  Para o firmware isso é transparente: transmite-se normalmente.
  * =====================================================================
  */
