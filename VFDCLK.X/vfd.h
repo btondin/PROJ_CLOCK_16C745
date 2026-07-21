@@ -38,6 +38,12 @@ void vfd_iniciar(void);
 /* Apaga a tela e leva o cursor para a posição inicial (código 15h).  */
 void vfd_limpar(void);
 
+/* Reafirma um estado conhecido (cursor invisível + cursor no início)
+ * SEM limpar a tela. Usada no refresco periódico de auto-correção,
+ * logo antes de um redesenho completo — cura desvios de modo/posição
+ * causados por ruído, sem piscar.                                    */
+void vfd_reafirmar(void);
+
 /* Posiciona o cursor. linha: 0..1, coluna: 0..19 (comando 1Bh + ID,
  * posições numeradas da esquerda p/ direita, de cima p/ baixo).      */
 void vfd_cursor(uint8_t linha, uint8_t coluna);

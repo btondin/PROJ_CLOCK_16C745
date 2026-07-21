@@ -54,6 +54,10 @@
 #define SHT_PERIODO_SEGUNDOS  30u  /* intervalo entre medições        */
 #define MSG_SYNC_SEGUNDOS     3u   /* aviso "hora sincronizada"       */
 #define ALARME_MAX_SEGUNDOS   61u /* silencia sozinho após 2 min     */
+#define REFRESCO_SEGUNDOS     900u /* redesenho completo de auto-correção
+                                    * (15 min): repõe cursor e reescreve
+                                    * a tela toda, curando qualquer
+                                    * desalinhamento por ruído          */
 #define BRILHO_PADRAO         VFD_BRILHO_MAXIMO
 
 /* Telas do carrossel (o botão 1 avança manualmente)                  */
@@ -89,10 +93,11 @@ void board_iniciar_pinos(void)
     /* = 0b11110101: SCL e SCK saídas; SDA e DATA soltos (entradas)  */
 
     /* PORTC: RC6 = TX (o USART assume o controle do pino quando
-     * TXEN=1/SPEN=1); RC4/RC5 são do USB; RC2 = buzzer, a ÚNICA
-     * saída deste porto. Demais como entrada.                        */
-    BUZZER_DESLIGAR();                     /* mudo antes de virar saída */
-    TRISC = (uint8_t)~BUZZER_MASCARA;
+     * TXEN=1/SPEN=1); RC4/RC5 são do USB; RC2 = buzzer e RC0 = LED de
+     * heartbeat são as saídas. Demais como entrada.                  */
+    BUZZER_DESLIGAR();                  /* estados definidos ANTES de */
+    LED_HB_DESLIGAR();                  /* virarem saída              */
+    TRISC = (uint8_t)~(BUZZER_MASCARA | LED_HB_MASCARA);
 }
 
 /* ------------------------------------------------------------------
@@ -142,6 +147,28 @@ void __interrupt() interrupcao(void)
 /* ------------------------------------------------------------------
  * Formatação de texto (sem printf: economiza ~1,5 K words de ROM)
  * ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------
+ * Heartbeat: pisca o LED de RC0 a ~1 Hz enquanto espera 'ms'
+ * milissegundos. Usado nos trechos que ficam parados num delay (o
+ * teste do VFD, o splash), para o LED continuar sinalizando vida.
+ * O estado é 'static': o pisca continua de onde parou entre chamadas.
+ * ------------------------------------------------------------------ */
+static void esperar_piscando(uint16_t ms)
+{
+    static bool    led  = false;
+    static uint8_t cont = 0;
+
+    while (ms >= 50u) {
+        if (++cont >= 10u) {           /* 10 x 50 ms = 500 ms -> 1 Hz */
+            cont = 0;
+            led = !led;
+            if (led) { LED_HB_LIGAR(); } else { LED_HB_DESLIGAR(); }
+        }
+        __delay_ms(50);
+        ms -= 50u;
+    }
+}
 
 /* Escreve os 2 dígitos de um valor BCD em p[0..1]                    */
 static void por_bcd(char *p, uint8_t bcd)
@@ -269,7 +296,9 @@ static void tela_clima(void)
 }
 
 /* Tela 3 — alarme:  |     ALARME 07:00   |
- *                   |       LIGADO       |                          */
+ *                   |      ATIVADO       |
+ * "ATIVADO/DESATIVADO" (e não "LIGADO/DESLIGADO") para deixar claro que
+ * se refere ao ALARME estar habilitado, não à energia do aparelho.    */
 static void tela_alarme(void)
 {
     char b[VFD_COLUNAS + 1];
@@ -283,11 +312,13 @@ static void tela_alarme(void)
 
     linha_limpa(b);
     if (alarme_ligado) {
-        b[7] = 'L'; b[8] = 'I'; b[9] = 'G'; b[10] = 'A';
-        b[11] = 'D'; b[12] = 'O';
+        /* "ATIVADO" centralizado (7 letras)                          */
+        b[7] = 'A'; b[8] = 'T'; b[9] = 'I'; b[10] = 'V';
+        b[11] = 'A'; b[12] = 'D'; b[13] = 'O';
     } else {
-        b[6] = 'D'; b[7] = 'E'; b[8] = 'S'; b[9] = 'L'; b[10] = 'I';
-        b[11] = 'G'; b[12] = 'A'; b[13] = 'D'; b[14] = 'O';
+        /* "DESATIVADO" centralizado (10 letras)                      */
+        b[5] = 'D'; b[6] = 'E'; b[7] = 'S'; b[8] = 'A'; b[9] = 'T';
+        b[10] = 'I'; b[11] = 'V'; b[12] = 'A'; b[13] = 'D'; b[14] = 'O';
     }
     vfd_linha(1, b);
 }
@@ -314,11 +345,14 @@ static void tela_alarme_tocando(void)
     vfd_linha(1, b);
 }
 
-/* Aviso enquanto o RTC não tem hora confiável (OSF setado)           */
+/* Aviso enquanto o RTC não tem hora confiável (OSF setado / nunca
+ * sincronizado). NÃO detecta a conexão USB — sinaliza que a HORA está
+ * inválida; a ação do usuário é rodar o app de acerto (DTCAPP). Por
+ * isso a mensagem fala em "atualizar", não em "conectar".            */
 static void tela_ajuste_pendente(void)
 {
-    vfd_linha(0, "  HORA NAO AJUSTADA");
-    vfd_linha(1, " CONECTE AO PC (USB)");
+    vfd_linha(0, "ATUALIZE HORA E DATA");
+    vfd_linha(1, "      PELO USB");
 }
 
 /* Confirmação após receber acerto pelo USB                           */
@@ -411,12 +445,12 @@ void main(void)
      *  RAM do resto do main (ver histórico: mesmo truque do heartbeat).
      * ================================================================ */
     {
-        static volatile uint8_t teste_vfd = 1u;
+        static volatile uint8_t teste_vfd = 0u;
         uint8_t i;
 
         board_iniciar_pinos();
         uart_iniciar();
-        __delay_ms(500);                 /* power-up de 500 ms do VFD  */
+        esperar_piscando(500);           /* power-up de 500 ms do VFD  */
         UART_TX(0x0Eu);                  /* cursor invisível           */
 
         while (teste_vfd) {
@@ -429,10 +463,11 @@ void main(void)
             }
             UART_TX(0x1Bu);
             UART_TX(VFD_COLUNAS);                    /* -> linha 1, col 0 */
+            __delay_ms(3);                           /* respiro pós-posição */
             for (i = 0; i < VFD_COLUNAS; i++) {
                 UART_TX((uint8_t)('A' + i));         /* ABCDE...T      */
             }
-            __delay_ms(3000);
+            esperar_piscando(3000);
 
             /* Padrão B — 'U' (0x55, bits alternados = pior caso de
              * baud) em cima; '8' (acende quase todos os pontos) embaixo. */
@@ -443,10 +478,11 @@ void main(void)
             }
             UART_TX(0x1Bu);
             UART_TX(VFD_COLUNAS);
+            __delay_ms(3);                           /* respiro pós-posição */
             for (i = 0; i < VFD_COLUNAS; i++) {
                 UART_TX('8');
             }
-            __delay_ms(3000);
+            esperar_piscando(3000);
         }
     }
 
@@ -458,6 +494,9 @@ void main(void)
     uint8_t buzzer_fase    = 0;      /* padrão intermitente do buzzer */
     bool    redesenhar     = false;  /* forçado por botão             */
     uint8_t tela_desenhada = 0xFFu;  /* qual tela está pintada        */
+    uint8_t hb_contador    = 0;      /* divisor do heartbeat (LED)    */
+    bool    hb_estado      = false;  /* estado atual do LED           */
+    uint16_t cont_refresco = 0;      /* segundos até o refresco total */
     bool    alarme_desenhado = false;/* tela de alarme já pintada     */
     btn_evento_t evento;
     uint8_t acerto[USB_TAM_REPORT];
@@ -485,7 +524,7 @@ void main(void)
     vfd_iniciar();
     vfd_brilho(BRILHO_PADRAO);
     vfd_linha(0, "       VFDCLK");
-    vfd_linha(1, "  PIC16C745 v1.0");
+    vfd_linha(1, "      VER. 1.0");
 
     hora_valida = ds3231_hora_valida();
     /* Recupera o alarme guardado na bateria do RTC (o PIC não tem
@@ -592,6 +631,21 @@ void main(void)
 
         if (rtc_presente && (hora_atual.segundos != seg_anterior)) {
             seg_anterior = hora_atual.segundos;
+
+            /* 2·) Refresco periódico de AUTO-CORREÇÃO: a cada
+             *     REFRESCO_SEGUNDOS reafirma o estado do display
+             *     (cursor no início/invisível) e força um redesenho
+             *     completo. Se um byte se perdeu por ruído e a tela
+             *     "desalinhou", isto conserta sozinho, sem piscar
+             *     (o conteúdo é reescrito por cima, não há clear).     */
+            if (++cont_refresco >= REFRESCO_SEGUNDOS) {
+                cont_refresco = 0;
+                vfd_reafirmar();
+                tela_desenhada   = 0xFFu;   /* força redesenho completo */
+                exibido_horas    = 0xFFu;   /* e reescrita dos dígitos  */
+                exibido_minutos  = 0xFFu;
+                exibido_segundos = 0xFFu;
+            }
 
             /* 2a) O alarme disparou? O flag A1F é LATCHED no DS3231,
              *     então basta consultá-lo 1x por segundo — nenhum
@@ -701,7 +755,16 @@ void main(void)
             }
         }
 
-        /* 3) Cadência do laço: ~20 leituras de RTC por segundo dão
+        /* 3) Heartbeat: pisca o LED de RC0 a ~1 Hz. Como está atrelado
+         *    à cadência do laço, ele também SINALIZA a saúde do laço —
+         *    se travar (ex.: I2C preso), o LED congela e você vê.     */
+        if (++hb_contador >= 10u) {   /* 10 x 50 ms = 500 ms -> 1 Hz  */
+            hb_contador = 0;
+            hb_estado = !hb_estado;
+            if (hb_estado) { LED_HB_LIGAR(); } else { LED_HB_DESLIGAR(); }
+        }
+
+        /* 4) Cadência do laço: ~20 leituras de RTC por segundo dão
          *    precisão de ±50 ms na virada do segundo exibido.        */
         __delay_ms(50);
     }

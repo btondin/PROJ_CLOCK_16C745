@@ -33,6 +33,7 @@
  *    24   RB3         SCK  do SHT15 (push-pull via sombra de PORTB)
  *    2    RA0         BOTÃO 1 (troca de tela) — p/ GND, pull-up 10k
  *    3    RA1         BOTÃO 2 (alarme)        — p/ GND, pull-up 10k
+ *    11   RC0         LED de heartbeat (liveness) — série c/ ~330R p/ GND
  *    13   RC2         BUZZER (via transistor NPN; nível 1 = tocando)
  *    1    MCLR        pull-up 10k (reset externo opcional)
  *   demais RA/RB/RC   livres
@@ -133,6 +134,18 @@ extern volatile uint8_t portb_sombra;
 #define BUZZER_MASCARA      0x04u               /* RC2                */
 #define BUZZER_LIGAR()      do { PORTCbits.RC2 = 1; } while (0)
 #define BUZZER_DESLIGAR()   do { PORTCbits.RC2 = 0; } while (0)
+
+/* ------------------------------------------------------------------
+ * LED de HEARTBEAT (liveness) — RC0 (pino 11)
+ * ------------------------------------------------------------------
+ * Pisca a ~1 Hz sempre que o firmware está executando um laço. É um
+ * sinal visual permanente de que o PIC está VIVO: se o display ficar
+ * apagado mas o LED continuar piscando, o problema está no caminho do
+ * display, não no processador. LED + resistor ~330 Ω de RC0 para GND.
+ * ------------------------------------------------------------------ */
+#define LED_HB_MASCARA      0x01u               /* RC0                */
+#define LED_HB_LIGAR()      do { PORTCbits.RC0 = 1; } while (0)
+#define LED_HB_DESLIGAR()   do { PORTCbits.RC0 = 0; } while (0)
 
 /* Inicialização dos pinos — implementada em main.c (chamada única).  */
 void board_iniciar_pinos(void);

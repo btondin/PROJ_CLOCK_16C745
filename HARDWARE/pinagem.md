@@ -23,7 +23,7 @@ contra o arquivo de definição oficial do dispositivo (Microchip DFP
             VSS   8 ┤   (GND)       ├ 21  RB0   ── SDA  (DS3231)
       OSC1/CLKIN  9 ┤   ── xtal     ├ 20  VDD   (+5 V)
      OSC2/CLKOUT 10 ┤   ── xtal     ├ 19  VSS   (GND)
-   RC0/T1OSO     11 ┤               ├ 18  RC7/RX/DT
+   RC0/T1OSO     11 ┤ ── LED (HB)   ├ 18  RC7/RX/DT
    RC1/T1OSI     12 ┤               ├ 17  RC6/TX ── serial p/ VFD (via MAX232)
       RC2/CCP1   13 ┤ ── BUZZER     ├ 16  RC5/D+ ── USB D+
            VUSB  14 ┤               ├ 15  RC4/D- ── USB D-
@@ -35,6 +35,7 @@ contra o arquivo de definição oficial do dispositivo (Microchip DFP
 |   1  | MCLR/VPP     | Pull-up 10 kΩ para +5 V (+ conector ICSP p/ gravar)   |
 |   2  | RA0          | **Botão 1** (troca de tela) — p/ GND, pull-up 10 kΩ   |
 |   3  | RA1          | **Botão 2** (alarme) — p/ GND, pull-up 10 kΩ          |
+|  11  | RC0          | **LED de heartbeat** — em série c/ ~330 Ω para GND    |
 |  13  | RC2          | **Buzzer** via transistor NPN (nível 1 = tocando)     |
 |   8  | VSS          | GND                                                   |
 |   9  | OSC1         | Cristal 24 MHz + 15–22 pF para GND                     |
@@ -205,26 +206,54 @@ escritas evita qualquer interferência de *read-modify-write*.
 | **1** (RA0) | avança a tela: hora → clima → alarme → hora |
 | **2** (RA1) | toque **curto**: silencia o alarme tocando<br>toque **longo** (~2 s): liga/desliga o alarme |
 
-Buzzer (ativo, 5 V), acionado por transistor porque o pino do PIC não
-deve fornecer a corrente dele diretamente:
+Buzzer: **TMB-05** — buzzer **magnético ativo** de 5 V (tem oscilador
+interno, então emite som só com nível DC; o firmware apenas liga/desliga
+o pino RC2, sem PWM). É acionado por um transistor porque o pino do PIC
+não deve fornecer a corrente dele diretamente, e leva um **diodo de
+roda-livre** por ser uma carga indutiva (magnética):
 
 ```
                           +5 V
                            │
-                       [BUZZER ativo 5 V]
-                           │
+                 ┌─────────┼─────────┐
+                 │         │          │
+              [diodo]  [TMB-05]       │   diodo 1N4148/1N4007
+              catodo──►  buzzer       │   catodo (faixa) p/ +5 V
+                 │         │          │
+                 └─────────┴──► C     │
    RC2 (13) ──[1 kΩ]──B┤ NPN (BC547 / 2N3904)
                         └E── GND
 ```
 
-O RC2 é o **CCP1**: se preferir um piezo *passivo*, dá para gerar o tom
-por PWM em vez de usar buzzer ativo (exigiria alterar o firmware, que
-hoje apenas liga/desliga o pino).
+- O **diodo em paralelo com o buzzer** (catodo (faixa) no +5 V, anodo no
+  coletor) absorve o pico de tensão quando o transistor corta — sem ele,
+  a indutância do TMB-05 pode danificar o transistor com o tempo.
+- Corrente típica do TMB-05 ≈ 25–35 mA @ 5 V, folgada para um BC547
+  (Ic máx 100 mA); a base com 1 kΩ dá saturação de sobra.
+- O RC2 é o **CCP1**: um dia, se trocar por um piezo *passivo*, dá para
+  gerar o tom por PWM (exigiria mudar o firmware, que hoje só chaveia o
+  pino).
 
 > **Nota sobre o pino INT/SQW do DS3231:** ele **não é usado** e pode
 > ficar desconectado. O flag de alarme `A1F` (status `0Fh`) é *latched* —
 > fica em 1 até ser reconhecido — então o firmware o consulta 1×/segundo
 > sem risco de perder um disparo, economizando um pino e um pull-up.
+
+### LED de heartbeat (liveness) — RC0
+
+Item **fixo** do projeto: um LED que pisca a ~1 Hz sempre que o firmware
+está executando o laço principal. Serve como sinal permanente de que o
+PIC está vivo e o laço rodando — se ele congelar, algo travou (ex.: I²C
+preso). Também facilita o diagnóstico na bancada: display apagado **com**
+o LED piscando aponta problema no caminho do display, não no processador.
+
+```
+   RC0 (11) ──►|──[ ~330 Ω ]── GND     (acende em nível alto)
+              LED
+```
+
+O firmware pisca o LED na cadência do laço (contador ÷10 sobre os 50 ms),
+então o ritmo do pisca também reflete a saúde/tempo do laço.
 
 ---
 
@@ -244,9 +273,12 @@ hoje apenas liga/desliga o pino).
 | 1   | Resistor 10 kΩ                       | pull-up de MCLR                    |
 | 2   | Botão táctil (push-button)           | troca de tela / alarme             |
 | 2   | Resistor 10 kΩ                       | pull-ups dos botões                |
-| 1   | Buzzer ativo 5 V                     | alarme sonoro                      |
+| 1   | Buzzer ativo 5 V (TMB-05)            | alarme sonoro                      |
 | 1   | Transistor NPN (BC547/2N3904)        | aciona o buzzer                    |
 | 1   | Resistor 1 kΩ                        | base do transistor do buzzer       |
+| 1   | Diodo 1N4148/1N4007                  | roda-livre do buzzer               |
+| 1   | LED (qualquer cor)                   | heartbeat / liveness (RC0)         |
+| 1   | Resistor 330 Ω                       | limitador do LED de heartbeat      |
 | 1   | Resistor 1,5 kΩ                      | identificação USB low-speed        |
 | 1   | Capacitor 0,22 µF                    | VUSB                               |
 | —   | Capacitores 100 nF                   | desacoplamento (1 por CI)          |

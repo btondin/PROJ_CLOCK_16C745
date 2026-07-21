@@ -34,16 +34,44 @@
 
 /* Códigos de controle do IEE 036X2 (A0/RS baixo, seção 4.1)          */
 #define VFD_CMD_CURSOR_OFF      0x0Eu
+#define VFD_CMD_TRAVA_ROLAGEM   0x10u   /* Scroll Line Lock + ID (2 by) */
 #define VFD_CMD_RESET_SW        0x14u
 #define VFD_CMD_LIMPAR_HOME     0x15u
+#define VFD_CMD_HOME            0x16u   /* cursor ao início, sem limpar */
 #define VFD_CMD_POSICIONAR      0x1Bu
 #define VFD_CMD_PREFIXO_A0      0x19u   /* A0=1 só para o próximo byte */
+
+/* ID do "Scroll Line Lock" (10h): 01h trava as linhas 0 E 1 — as duas
+ * do display 20x2 — contra a rolagem vertical (spec 4.6).            */
+#define VFD_TRAVA_LINHAS_0E1    0x01u
 
 /* Códigos de controle com A0 alto (seção 4.5, exigem prefixo 19h)    */
 #define VFD_CMD_BRILHO          0x30u
 #define VFD_BRILHO_TODAS_COLS   0xFFu
 #define VFD_CMD_BLINK_INICIO    0x31u   /* + código de taxa (2 bytes)  */
 #define VFD_CMD_BLINK_FIM       0x32u
+
+/* ------------------------------------------------------------------
+ * "Respiro" após o comando de posicionamento (1Bh + posição)
+ * ------------------------------------------------------------------
+ * O USART do PIC transmite BACK-TO-BACK (o buffer duplo TXREG->TSR
+ * emenda um byte no outro, sem intervalo). O display IEE, depois de
+ * receber "mover cursor" (1Bh + posição), fica ocupado ~1..1,5 ms
+ * executando o movimento e, nesse meio-tempo, PERDE os primeiros
+ * caracteres enviados em seguida (ou os marca com '#', o símbolo de
+ * erro de recepção — spec 3.2.2.1). Foi por isso que o teste manual
+ * pelo PL2303 (bytes digitados com pausas) funcionou e a transmissão
+ * contínua do PIC não. Este atraso curto dá tempo ao display antes de
+ * mandar os dados. O streaming de caracteres em si aguenta 19200
+ * back-to-back (Send Character ~170 us < 521 us/byte).               */
+#define VFD_ATRASO_POS_MS   3
+
+#define VFD_IR_PARA(pos)                          \
+    do {                                          \
+        UART_TX(VFD_CMD_POSICIONAR);              \
+        UART_TX((uint8_t)(pos));                  \
+        __delay_ms(VFD_ATRASO_POS_MS);            \
+    } while (0)
 
 void vfd_iniciar(void)
 {
@@ -68,6 +96,16 @@ void vfd_iniciar(void)
      * um caractere piscando na tela, parecendo um editor de texto.   */
     UART_TX(VFD_CMD_CURSOR_OFF);
     __delay_ms(10);
+
+    /* TRAVA A ROLAGEM VERTICAL (10h + 01h). Este é o comando CRÍTICO
+     * para um relógio: o modo padrão do display é ROLAR para cima
+     * quando a última linha enche (spec 4.3), o que fazia o conteúdo
+     * escrito na 2ª linha "subir" para a 1ª — e a 2ª nunca era usada.
+     * Travando as duas linhas, cada uma fica no lugar e o
+     * posicionamento explícito (1Bh) controla tudo.                   */
+    UART_TX(VFD_CMD_TRAVA_ROLAGEM);
+    UART_TX(VFD_TRAVA_LINHAS_0E1);
+    __delay_ms(10);
 }
 
 void vfd_limpar(void)
@@ -75,11 +113,30 @@ void vfd_limpar(void)
     UART_TX(VFD_CMD_LIMPAR_HOME);
 }
 
+void vfd_reafirmar(void)
+{
+    /* Reestabelece um estado conhecido ANTES do redesenho completo do
+     * refresco periódico de auto-correção:
+     *   - 0Eh: cursor invisível (caso ruído tenha reativado o cursor);
+     *   - 16h: cursor ao início ("home") — re-sincroniza a posição
+     *     interna do display sem limpar a tela.
+     * Não limpa a tela (o conteúdo é reescrito por cima em seguida),
+     * então o refresco NÃO pisca. Os respiros pós-comando evitam que o
+     * display perca o byte seguinte (mesmo motivo do VFD_IR_PARA).     */
+    UART_TX(VFD_CMD_CURSOR_OFF);
+    __delay_ms(VFD_ATRASO_POS_MS);
+    UART_TX(VFD_CMD_HOME);
+    __delay_ms(VFD_ATRASO_POS_MS);
+    /* Reafirma também a trava de rolagem, caso ruído a tenha desfeito */
+    UART_TX(VFD_CMD_TRAVA_ROLAGEM);
+    UART_TX(VFD_TRAVA_LINHAS_0E1);
+    __delay_ms(VFD_ATRASO_POS_MS);
+}
+
 void vfd_cursor(uint8_t linha, uint8_t coluna)
 {
     /* Posições numeradas 0..39: linha 0 = 0..19, linha 1 = 20..39.   */
-    UART_TX(VFD_CMD_POSICIONAR);
-    UART_TX((uint8_t)(linha * VFD_COLUNAS + coluna));
+    VFD_IR_PARA(linha * VFD_COLUNAS + coluna);
 }
 
 void vfd_escrever_char(char c)
@@ -106,8 +163,7 @@ void vfd_linha(uint8_t linha, const char *texto)
     uint8_t c;
 
     /* Posicionamento inline (função-folha: não chama nada)           */
-    UART_TX(VFD_CMD_POSICIONAR);
-    UART_TX((uint8_t)(linha * VFD_COLUNAS));
+    VFD_IR_PARA(linha * VFD_COLUNAS);
 
     while ((*texto != '\0') && (coluna < VFD_COLUNAS)) {
         c = (uint8_t)*texto;
@@ -135,8 +191,7 @@ void vfd_escrever_em(uint8_t linha, uint8_t coluna, const char *texto)
      * sem repintar tudo — repintar as 2 linhas inteiras a cada segundo
      * são ~44 bytes = ~46 ms de escrita contínua, e isso aparece como
      * uma piscada na tela.                                           */
-    UART_TX(VFD_CMD_POSICIONAR);
-    UART_TX((uint8_t)(linha * VFD_COLUNAS + coluna));
+    VFD_IR_PARA(linha * VFD_COLUNAS + coluna);
 
     while (*texto != '\0') {
         c = (uint8_t)*texto;
@@ -167,14 +222,12 @@ void vfd_campo_bcd(uint8_t linha, uint8_t coluna, uint8_t novo, uint8_t antigo)
     if ((novo >> 4) != (antigo >> 4)) {
         /* A dezena mudou: manda os dois dígitos de uma vez (4 bytes,
          * mais barato que dois posicionamentos separados).           */
-        UART_TX(VFD_CMD_POSICIONAR);
-        UART_TX(base);
+        VFD_IR_PARA(base);
         UART_TX((uint8_t)('0' + (novo >> 4)));
         UART_TX((uint8_t)('0' + (novo & 0x0Fu)));
     } else {
         /* Só a unidade mudou: 1 caractere (3 bytes no total).        */
-        UART_TX(VFD_CMD_POSICIONAR);
-        UART_TX((uint8_t)(base + 1u));
+        VFD_IR_PARA(base + 1u);
         UART_TX((uint8_t)('0' + (novo & 0x0Fu)));
     }
 }

@@ -34,6 +34,9 @@ instalar driver (o aparelho enumera como HID genérico).
   no display, com auto-silenciamento após 2 minutos.
 - 🔘 **Dois botões**: um avança as telas; o outro silencia o alarme
   (toque curto) ou liga/desliga (toque longo de ~2 s).
+- 💓 **LED de heartbeat** (RC0): pisca a ~1 Hz enquanto o laço roda —
+  sinal permanente de que o PIC está vivo, e um diagnóstico grátis (se
+  congelar, algo travou).
 
 ---
 
@@ -82,6 +85,9 @@ Resumo dos periféricos (detalhes, valores de componentes e esquemático em
 | Sensor SHT15 | RB2/DATA, RB3/SCK   | Sensibus, pull-up 10 kΩ em DATA          |
 | USB          | RC4/D-, RC5/D+, VUSB | low-speed, 1,5 kΩ de VUSB para D-        |
 | Clock        | OSC1/OSC2 (9/10)    | cristal 24 MHz (HS, sem PLL)             |
+| Botões       | RA0, RA1 (2/3)      | troca de tela / alarme, pull-up 10 kΩ    |
+| Buzzer       | RC2 (13)            | alarme, via transistor NPN               |
+| LED heartbeat| RC0 (11)            | liveness ~1 Hz, série c/ 330 Ω           |
 
 ⚠️ **Ponto de atenção — serial do display:** o VFD espera a linha em
 repouso no nível **baixo** (mark, padrão EIA-232), enquanto a UART do PIC

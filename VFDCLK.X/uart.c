@@ -30,13 +30,20 @@ void uart_iniciar(void)
 {
     SPBRG = 77;             /* 19200 baud @ 24 MHz (ver cálculo acima) */
 
-    /* TXSTA: CSRC=0, TX9=0 (8 bits), TXEN=1 (habilita transmissor),
-     *        SYNC=0 (assíncrono), BRGH=1 (alta velocidade)           */
-    TXSTA = 0x24;
+    /* Ordem EXATA dos passos do datasheet (seção 11.2.1), que importa:
+     * o transmissor (TXEN) deve ser habilitado DEPOIS da porta serial
+     * (SPEN). Habilitar TXEN antes de SPEN pode deixar a saída em
+     * estado indefinido e não transmitir.                            */
 
-    /* RCSTA: SPEN=1 entrega os pinos RC6/RC7 ao USART. A recepção
-     *        (CREN) fica desligada — não é usada neste projeto.      */
+    /* 1) SYNC=0 (assíncrono) e BRGH=1 (alta velocidade); TXEN ainda 0 */
+    TXSTA = 0x04;
+
+    /* 2) SPEN=1 entrega os pinos RC6/RC7 ao USART (RC6/TX vira saída
+     *    controlada pelo periférico). CREN=0: recepção desligada.    */
     RCSTA = 0x80;
+
+    /* 3) por último, habilita o transmissor (isto também seta TXIF)  */
+    TXSTAbits.TXEN = 1;     /* TXSTA passa a 0x24                     */
 }
 
 void uart_enviar(uint8_t byte)
