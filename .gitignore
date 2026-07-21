@@ -43,7 +43,10 @@ funclist
 # ---------------------------------------------------------------------
 # Proteus (simulação em HARDWARE/)
 # ---------------------------------------------------------------------
-HARDWARE/Project Backups/
+# Proteus cria uma pasta "Project Backups" ao lado de CADA .pdsprj — na
+# HARDWARE/ e em cada subplaca (ex.: HARDWARE/AUXVFDBOARD/). Sem barra
+# inicial no caminho, o padrão casa "Project Backups/" em QUALQUER nível.
+Project Backups/
 *.pdsbak
 *.pwi
 # Arquivo de workspace/janelas é pessoal (posição das janelas etc.)
