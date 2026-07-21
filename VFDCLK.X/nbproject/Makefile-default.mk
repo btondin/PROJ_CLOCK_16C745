@@ -51,17 +51,17 @@ OBJECTDIR=build/${CND_CONF}/${IMAGE_TYPE}
 DISTDIR=dist/${CND_CONF}/${IMAGE_TYPE}
 
 # Source Files Quoted if spaced
-SOURCEFILES_QUOTED_IF_SPACED=main.c uart.c vfd.c swi2c.c ds3231.c sht1x.c usb_desc.c usb_hid.c
+SOURCEFILES_QUOTED_IF_SPACED=main.c uart.c vfd.c swi2c.c ds3231.c sht1x.c usb_desc.c usb_hid.c botoes.c
 
 # Object Files Quoted if spaced
-OBJECTFILES_QUOTED_IF_SPACED=${OBJECTDIR}/main.p1 ${OBJECTDIR}/uart.p1 ${OBJECTDIR}/vfd.p1 ${OBJECTDIR}/swi2c.p1 ${OBJECTDIR}/ds3231.p1 ${OBJECTDIR}/sht1x.p1 ${OBJECTDIR}/usb_desc.p1 ${OBJECTDIR}/usb_hid.p1
-POSSIBLE_DEPFILES=${OBJECTDIR}/main.p1.d ${OBJECTDIR}/uart.p1.d ${OBJECTDIR}/vfd.p1.d ${OBJECTDIR}/swi2c.p1.d ${OBJECTDIR}/ds3231.p1.d ${OBJECTDIR}/sht1x.p1.d ${OBJECTDIR}/usb_desc.p1.d ${OBJECTDIR}/usb_hid.p1.d
+OBJECTFILES_QUOTED_IF_SPACED=${OBJECTDIR}/main.p1 ${OBJECTDIR}/uart.p1 ${OBJECTDIR}/vfd.p1 ${OBJECTDIR}/swi2c.p1 ${OBJECTDIR}/ds3231.p1 ${OBJECTDIR}/sht1x.p1 ${OBJECTDIR}/usb_desc.p1 ${OBJECTDIR}/usb_hid.p1 ${OBJECTDIR}/botoes.p1
+POSSIBLE_DEPFILES=${OBJECTDIR}/main.p1.d ${OBJECTDIR}/uart.p1.d ${OBJECTDIR}/vfd.p1.d ${OBJECTDIR}/swi2c.p1.d ${OBJECTDIR}/ds3231.p1.d ${OBJECTDIR}/sht1x.p1.d ${OBJECTDIR}/usb_desc.p1.d ${OBJECTDIR}/usb_hid.p1.d ${OBJECTDIR}/botoes.p1.d
 
 # Object Files
-OBJECTFILES=${OBJECTDIR}/main.p1 ${OBJECTDIR}/uart.p1 ${OBJECTDIR}/vfd.p1 ${OBJECTDIR}/swi2c.p1 ${OBJECTDIR}/ds3231.p1 ${OBJECTDIR}/sht1x.p1 ${OBJECTDIR}/usb_desc.p1 ${OBJECTDIR}/usb_hid.p1
+OBJECTFILES=${OBJECTDIR}/main.p1 ${OBJECTDIR}/uart.p1 ${OBJECTDIR}/vfd.p1 ${OBJECTDIR}/swi2c.p1 ${OBJECTDIR}/ds3231.p1 ${OBJECTDIR}/sht1x.p1 ${OBJECTDIR}/usb_desc.p1 ${OBJECTDIR}/usb_hid.p1 ${OBJECTDIR}/botoes.p1
 
 # Source Files
-SOURCEFILES=main.c uart.c vfd.c swi2c.c ds3231.c sht1x.c usb_desc.c usb_hid.c
+SOURCEFILES=main.c uart.c vfd.c swi2c.c ds3231.c sht1x.c usb_desc.c usb_hid.c botoes.c
 
 
 
@@ -152,6 +152,14 @@ ${OBJECTDIR}/usb_hid.p1: usb_hid.c  nbproject/Makefile-${CND_CONF}.mk
 	@-${MV} ${OBJECTDIR}/usb_hid.d ${OBJECTDIR}/usb_hid.p1.d 
 	@${FIXDEPS} ${OBJECTDIR}/usb_hid.p1.d $(SILENT) -rsi ${MP_CC_DIR}../  
 	
+${OBJECTDIR}/botoes.p1: botoes.c  nbproject/Makefile-${CND_CONF}.mk 
+	@${MKDIR} "${OBJECTDIR}" 
+	@${RM} ${OBJECTDIR}/botoes.p1.d 
+	@${RM} ${OBJECTDIR}/botoes.p1 
+	${MP_CC} $(MP_EXTRA_CC_PRE) -mcpu=$(MP_PROCESSOR_OPTION) -c  -D__DEBUG=1  -mdebugger=none   -mdfp="${DFP_DIR}/xc8"  -O1 -fasmfile -maddrqual=ignore -xassembler-with-cpp -mwarn=-3 -Wa,-a -DXPRJ_default=$(CND_CONF)  -msummary=-psect,-class,+mem,-hex,-file  -ginhx32 -Wl,--data-init -mno-keep-startup -mno-osccal -mno-resetbits -mno-save-resetbits -mno-download -mno-stackcall -mno-default-config-bits $(COMPARISON_BUILD)  -std=c99 -gdwarf-3 -mstack=compiled:auto:auto     -o ${OBJECTDIR}/botoes.p1 botoes.c 
+	@-${MV} ${OBJECTDIR}/botoes.d ${OBJECTDIR}/botoes.p1.d 
+	@${FIXDEPS} ${OBJECTDIR}/botoes.p1.d $(SILENT) -rsi ${MP_CC_DIR}../  
+	
 else
 ${OBJECTDIR}/main.p1: main.c  nbproject/Makefile-${CND_CONF}.mk 
 	@${MKDIR} "${OBJECTDIR}" 
@@ -216,6 +224,14 @@ ${OBJECTDIR}/usb_hid.p1: usb_hid.c  nbproject/Makefile-${CND_CONF}.mk
 	${MP_CC} $(MP_EXTRA_CC_PRE) -mcpu=$(MP_PROCESSOR_OPTION) -c   -mdfp="${DFP_DIR}/xc8"  -O1 -fasmfile -maddrqual=ignore -xassembler-with-cpp -mwarn=-3 -Wa,-a -DXPRJ_default=$(CND_CONF)  -msummary=-psect,-class,+mem,-hex,-file  -ginhx32 -Wl,--data-init -mno-keep-startup -mno-osccal -mno-resetbits -mno-save-resetbits -mno-download -mno-stackcall -mno-default-config-bits $(COMPARISON_BUILD)  -std=c99 -gdwarf-3 -mstack=compiled:auto:auto     -o ${OBJECTDIR}/usb_hid.p1 usb_hid.c 
 	@-${MV} ${OBJECTDIR}/usb_hid.d ${OBJECTDIR}/usb_hid.p1.d 
 	@${FIXDEPS} ${OBJECTDIR}/usb_hid.p1.d $(SILENT) -rsi ${MP_CC_DIR}../  
+	
+${OBJECTDIR}/botoes.p1: botoes.c  nbproject/Makefile-${CND_CONF}.mk 
+	@${MKDIR} "${OBJECTDIR}" 
+	@${RM} ${OBJECTDIR}/botoes.p1.d 
+	@${RM} ${OBJECTDIR}/botoes.p1 
+	${MP_CC} $(MP_EXTRA_CC_PRE) -mcpu=$(MP_PROCESSOR_OPTION) -c   -mdfp="${DFP_DIR}/xc8"  -O1 -fasmfile -maddrqual=ignore -xassembler-with-cpp -mwarn=-3 -Wa,-a -DXPRJ_default=$(CND_CONF)  -msummary=-psect,-class,+mem,-hex,-file  -ginhx32 -Wl,--data-init -mno-keep-startup -mno-osccal -mno-resetbits -mno-save-resetbits -mno-download -mno-stackcall -mno-default-config-bits $(COMPARISON_BUILD)  -std=c99 -gdwarf-3 -mstack=compiled:auto:auto     -o ${OBJECTDIR}/botoes.p1 botoes.c 
+	@-${MV} ${OBJECTDIR}/botoes.d ${OBJECTDIR}/botoes.p1.d 
+	@${FIXDEPS} ${OBJECTDIR}/botoes.p1.d $(SILENT) -rsi ${MP_CC_DIR}../  
 	
 endif
 

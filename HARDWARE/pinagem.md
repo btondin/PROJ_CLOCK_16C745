@@ -14,8 +14,8 @@ contra o arquivo de definição oficial do dispositivo (Microchip DFP
 ```
                     ┌───────────────┐
         MCLR/VPP  1 ┤●              ├ 28  RB7/ICSPDAT
-         RA0/AN0  2 ┤               ├ 27  RB6/ICSPCLK
-         RA1/AN1  3 ┤               ├ 26  RB5
+         RA0/AN0  2 ┤ ── BOTÃO 1    ├ 27  RB6/ICSPCLK
+         RA1/AN1  3 ┤ ── BOTÃO 2    ├ 26  RB5
          RA2/AN2  4 ┤               ├ 25  RB4
     RA3/AN3/VREF  5 ┤               ├ 24  RB3   ── SCK  (SHT15)
      RA4/T0CKI    6 ┤               ├ 23  RB2   ── DATA (SHT15)
@@ -25,7 +25,7 @@ contra o arquivo de definição oficial do dispositivo (Microchip DFP
      OSC2/CLKOUT 10 ┤   ── xtal     ├ 19  VSS   (GND)
    RC0/T1OSO     11 ┤               ├ 18  RC7/RX/DT
    RC1/T1OSI     12 ┤               ├ 17  RC6/TX ── serial p/ VFD (via MAX232)
-      RC2/CCP1   13 ┤               ├ 16  RC5/D+ ── USB D+
+      RC2/CCP1   13 ┤ ── BUZZER     ├ 16  RC5/D+ ── USB D+
            VUSB  14 ┤               ├ 15  RC4/D- ── USB D-
                     └───────────────┘
 ```
@@ -33,6 +33,9 @@ contra o arquivo de definição oficial do dispositivo (Microchip DFP
 | Pino | Sinal        | Ligação no projeto                                    |
 |-----:|--------------|-------------------------------------------------------|
 |   1  | MCLR/VPP     | Pull-up 10 kΩ para +5 V (+ conector ICSP p/ gravar)   |
+|   2  | RA0          | **Botão 1** (troca de tela) — p/ GND, pull-up 10 kΩ   |
+|   3  | RA1          | **Botão 2** (alarme) — p/ GND, pull-up 10 kΩ          |
+|  13  | RC2          | **Buzzer** via transistor NPN (nível 1 = tocando)     |
 |   8  | VSS          | GND                                                   |
 |   9  | OSC1         | Cristal 24 MHz + 15–22 pF para GND                     |
 |  10  | OSC2         | Cristal 24 MHz + 15–22 pF para GND                     |
@@ -92,8 +95,8 @@ O PIC16C745 tem transceptor e regulador de 3,3 V embutidos.
 
 ## 4. Serial para o display VFD (o ponto que exige atenção)
 
-O display **IEE 036X2** é usado em **modo serial** (9600 8N1). Ajuste os
-jumpers de "personalidade" da placa do display para **9600 baud** e
+O display **IEE 036X2** é usado em **modo serial** (19200 8N1). Ajuste os
+jumpers de "personalidade" da placa do display para **19200 baud** e
 partida **NORM**, mantendo o **conjunto de comandos nativo (Intel, que é o
 padrão)** — **não** selecione o modo **LCD** (ele troca os comandos para os
 do HD44780, e o firmware usa os códigos nativos IEE). Seção 3.2.3 do
@@ -129,9 +132,25 @@ Como só transmitimos para o display, usa-se **um único canal (T1)**:
      C1: pino 1 (C1+) ↔ pino 3 (C1−)       C2: pino 4 (C2+) ↔ pino 5 (C2−)
      V+ (pino 2) ── C ── GND               V− (pino 6) ── C ── GND
      + 100 nF de VCC (16) para GND (desacoplamento)
-   Os canais R1/R2/T2 do MAX232 ficam sem uso. Confira os valores exatos
-   dos capacitores no datasheet do seu MAX232.
+   Confira os valores exatos dos capacitores no datasheet do seu MAX232.
 ```
+
+**Pinos não usados (canais R1, R2 e T2):**
+
+| Pino | Nome | O que fazer |
+|---:|---|---|
+| 10 | T2IN | **ligar ao GND** — é a única entrada TTL sobrando |
+| 7 | T2OUT | deixar **aberto** (saída) |
+| 9 | R2OUT | deixar **aberto** (saída) |
+| 12 | R1OUT | deixar **aberto** (saída) |
+| 8 | R2IN | deixar **aberto** |
+| 13 | R1IN | deixar **aberto** |
+
+Regra geral: **saída nunca se amarra** (ligá-la a GND/VCC é curto);
+**entrada não pode ficar indefinida**. Nesta família as entradas já têm
+resistor interno — TTL com pull-up de ~400 kΩ e RS-232 com pull-down de
+~5 kΩ — então nada flutua de fato. Mesmo assim vale aterrar o T2IN: o
+pull-up de 400 kΩ é fraco e um fio solto em protoboard capta ruído.
 
 - O firmware (`uart.c`) transmite UART padrão: toda a conversão de nível e
   a inversão de polaridade acontecem no MAX232, de forma transparente ao
@@ -167,12 +186,54 @@ Coloque 100 nF entre VDD e GND do sensor, bem próximo dele.
 
 ---
 
+## 5.1 Botões e buzzer (alarme)
+
+Os botões ficam no **PORTA** de propósito: o PORTB é reservado aos dois
+barramentos bit-bang (I²C e Sensibus), e mantê-lo livre de outras
+escritas evita qualquer interferência de *read-modify-write*.
+
+```
+   +5 V ──10kΩ──┬── RA0 (pino 2)         +5 V ──10kΩ──┬── RA1 (pino 3)
+                │                                      │
+             [BOTÃO 1]                              [BOTÃO 2]
+                │                                      │
+               GND                                    GND
+```
+
+| Botão | Ação |
+|---|---|
+| **1** (RA0) | avança a tela: hora → clima → alarme → hora |
+| **2** (RA1) | toque **curto**: silencia o alarme tocando<br>toque **longo** (~2 s): liga/desliga o alarme |
+
+Buzzer (ativo, 5 V), acionado por transistor porque o pino do PIC não
+deve fornecer a corrente dele diretamente:
+
+```
+                          +5 V
+                           │
+                       [BUZZER ativo 5 V]
+                           │
+   RC2 (13) ──[1 kΩ]──B┤ NPN (BC547 / 2N3904)
+                        └E── GND
+```
+
+O RC2 é o **CCP1**: se preferir um piezo *passivo*, dá para gerar o tom
+por PWM em vez de usar buzzer ativo (exigiria alterar o firmware, que
+hoje apenas liga/desliga o pino).
+
+> **Nota sobre o pino INT/SQW do DS3231:** ele **não é usado** e pode
+> ficar desconectado. O flag de alarme `A1F` (status `0Fh`) é *latched* —
+> fica em 1 até ser reconhecido — então o firmware o consulta 1×/segundo
+> sem risco de perder um disparo, economizando um pino e um pull-up.
+
+---
+
 ## 6. Lista de materiais (resumo)
 
 | Qtd | Componente                          | Observação                         |
 |----:|-------------------------------------|------------------------------------|
 | 1   | PIC16C745 (DIP-28)                   | versão **/JW** (janela) p/ regravar |
-| 1   | Display VFD IEE 036X2 (20×2)         | jumpers em SERIAL / 9600           |
+| 1   | Display VFD IEE 036X2 (20×2)         | jumper em 19200 baud               |
 | 1   | DS3231 (módulo com bateria)          | RTC I²C                            |
 | 1   | Sensirion SHT15                      | sensor T/RH                        |
 | 1   | Cristal 24 MHz + 2× 15–22 pF         | clock do USB                       |
@@ -181,6 +242,11 @@ Coloque 100 nF entre VDD e GND do sensor, bem próximo dele.
 | 2   | Resistor 4,7 kΩ                      | pull-ups I²C                       |
 | 1   | Resistor 10 kΩ                       | pull-up DATA do SHT15              |
 | 1   | Resistor 10 kΩ                       | pull-up de MCLR                    |
+| 2   | Botão táctil (push-button)           | troca de tela / alarme             |
+| 2   | Resistor 10 kΩ                       | pull-ups dos botões                |
+| 1   | Buzzer ativo 5 V                     | alarme sonoro                      |
+| 1   | Transistor NPN (BC547/2N3904)        | aciona o buzzer                    |
+| 1   | Resistor 1 kΩ                        | base do transistor do buzzer       |
 | 1   | Resistor 1,5 kΩ                      | identificação USB low-speed        |
 | 1   | Capacitor 0,22 µF                    | VUSB                               |
 | —   | Capacitores 100 nF                   | desacoplamento (1 por CI)          |

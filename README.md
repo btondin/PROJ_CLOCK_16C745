@@ -9,8 +9,8 @@ instalar driver (o aparelho enumera como HID genérico).
 
 > Firmware em C (MPLAB XC8), escrito na forma canônica de projetos para
 > PIC: `board.h` central, um driver por periférico, documentação e
-> referência de datasheet em cada módulo. Compila em **62,5 %** da ROM
-> (5118/8192 words) e **66,4 %** da RAM (170/256 bytes) do PIC16C745.
+> referência de datasheet em cada módulo. Compila em **79,7 %** da ROM
+> (6526/8192 words) e **71,1 %** da RAM (182/256 bytes) do PIC16C745.
 
 ---
 
@@ -21,11 +21,19 @@ instalar driver (o aparelho enumera como HID genérico).
 - 🌡️ **Temperatura e umidade** com sensor **Sensirion SHT15**, incluindo
   verificação de **CRC-8** e conversão em **ponto fixo** (sem `float`,
   validada contra as fórmulas oficiais da Sensirion).
-- 🖥️ **Display VFD 20×2** em modo serial (9600 8N1), com telas que
-  alternam automaticamente (6 s hora / 4 s clima) e controle de brilho.
+- 🖥️ **Display VFD 20×2** em modo serial (19200 8N1), com telas que
+  alternam automaticamente (6 s hora / 4 s clima / 3 s alarme) e
+  controle de brilho.
 - 🔌 **Acerto de hora por USB** (classe HID, **sem driver**): o firmware
   recebe a hora do PC e grava no DS3231. Todo o stack USB roda por
   interrupção, então o relógio nunca "trava" durante a comunicação.
+- ⏱️ **Alarme diário**, configurável pelo PC (`--alarme 07:30`) ou pelos
+  botões. Fica guardado nos registradores do **DS3231 alimentados pela
+  bateria** — a única memória não-volátil do projeto, já que o PIC16C745
+  é OTP e **não tem EEPROM**. Aviso sonoro (buzzer) + mensagem piscando
+  no display, com auto-silenciamento após 2 minutos.
+- 🔘 **Dois botões**: um avança as telas; o outro silencia o alarme
+  (toque curto) ou liga/desliga (toque longo de ~2 s).
 
 ---
 
@@ -44,9 +52,10 @@ PROJ_CLOCK_16C745/
 │   ├── ds3231.c/.h           ← driver do RTC
 │   ├── sht1x.c/.h            ← driver do sensor + conversão ponto fixo
 │   ├── usb_hid.c/.h          ← stack USB HID (capítulo 9 + classe)
-│   └── usb_desc.c/.h         ← descritores USB
+│   ├── usb_desc.c/.h         ← descritores USB
+│   └── botoes.c/.h           ← debounce e toque curto/longo
 ├── DTCAPP/                   ← utilitário do PC (Python)
-│   ├── dtc_sync.py           ← envia a hora do PC ao relógio
+│   ├── dtc_sync.py           ← acerta hora e alarme pelo USB
 │   ├── teste_conversao.py    ← valida a matemática do SHT15
 │   └── requirements.txt
 ├── HARDWARE/
@@ -68,7 +77,7 @@ Resumo dos periféricos (detalhes, valores de componentes e esquemático em
 
 | Bloco        | Pinos do PIC        | Observação                              |
 |--------------|---------------------|-----------------------------------------|
-| Display VFD  | RC6/TX (17)         | serial 9600 8N1, **via MAX232**         |
+| Display VFD  | RC6/TX (17)         | serial 19200 8N1, **via MAX232**        |
 | RTC DS3231   | RB0/SDA, RB1/SCL    | I²C por software, pull-ups 4,7 kΩ        |
 | Sensor SHT15 | RB2/DATA, RB3/SCK   | Sensibus, pull-up 10 kΩ em DATA          |
 | USB          | RC4/D-, RC5/D+, VUSB | low-speed, 1,5 kΩ de VUSB para D-        |

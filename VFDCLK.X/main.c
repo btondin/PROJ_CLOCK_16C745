@@ -35,6 +35,7 @@
 #include "ds3231.h"
 #include "sht1x.h"
 #include "usb_hid.h"
+#include "botoes.h"
 
 /* ------------------------------------------------------------------
  * Bits de configuração (gravados junto com o programa)
@@ -49,9 +50,17 @@
  * ------------------------------------------------------------------ */
 #define TELA_HORA_SEGUNDOS    6u   /* tempo exibindo hora/data        */
 #define TELA_CLIMA_SEGUNDOS   4u   /* tempo exibindo temp/umidade     */
+#define TELA_ALARME_SEGUNDOS  3u   /* tempo exibindo o alarme         */
 #define SHT_PERIODO_SEGUNDOS  30u  /* intervalo entre medições        */
 #define MSG_SYNC_SEGUNDOS     3u   /* aviso "hora sincronizada"       */
+#define ALARME_MAX_SEGUNDOS   61u /* silencia sozinho após 2 min     */
 #define BRILHO_PADRAO         VFD_BRILHO_MAXIMO
+
+/* Telas do carrossel (o botão 1 avança manualmente)                  */
+#define TELA_HORA     0u
+#define TELA_CLIMA    1u
+#define TELA_ALARME   2u
+#define TELA_QUANTAS  3u
 
 /* Sombra do latch de PORTB — ver explicação em board.h               */
 volatile uint8_t portb_sombra;
@@ -61,10 +70,11 @@ volatile uint8_t portb_sombra;
  * ------------------------------------------------------------------ */
 void board_iniciar_pinos(void)
 {
-    /* PORTA: não usado. Deixa como entrada e desliga o A/D para que
-     * RA0..RA5 funcionem como digitais caso venham a ser usados.
-     * (No PIC16C745, ADCON1 com PCFG=0b111 põe todos os canais
-     *  em modo digital — ver seção 11 do datasheet DS41124D.)       */
+    /* PORTA: entradas. RA0 = botão de tela, RA1 = botão de alarme
+     * (ambos para GND, com pull-up externo de 10k).
+     * ADCON1 com PCFG=0b111 põe TODOS os canais em modo digital —
+     * indispensável para ler RA0/RA1 como entradas comuns
+     * (ver seção 11 do datasheet DS41124D).                         */
     ADCON1 = 0x07;
     TRISA  = 0xFF;
 
@@ -79,8 +89,10 @@ void board_iniciar_pinos(void)
     /* = 0b11110101: SCL e SCK saídas; SDA e DATA soltos (entradas)  */
 
     /* PORTC: RC6 = TX (o USART assume o controle do pino quando
-     * TXEN=1/SPEN=1); RC4/RC5 são do USB. Demais como entrada.       */
-    TRISC = 0xFF;
+     * TXEN=1/SPEN=1); RC4/RC5 são do USB; RC2 = buzzer, a ÚNICA
+     * saída deste porto. Demais como entrada.                        */
+    BUZZER_DESLIGAR();                     /* mudo antes de virar saída */
+    TRISC = (uint8_t)~BUZZER_MASCARA;
 }
 
 /* ------------------------------------------------------------------
@@ -91,6 +103,22 @@ static sht1x_medida_t medida;              /* última leitura do SHT15 */
 static bool ha_medida    = false;          /* já houve leitura boa?   */
 static bool rtc_presente = false;          /* DS3231 respondeu?       */
 static bool hora_valida  = false;          /* OSF limpo no DS3231?    */
+
+/* Estado do alarme. O horário e a habilitação VIVEM NO DS3231 (na
+ * bateria); estas variáveis são só um espelho para exibir sem ter de
+ * reler o RTC a cada redesenho.                                      */
+static uint8_t alarme_horas    = 0x07u;    /* BCD (padrão 07:00)      */
+static uint8_t alarme_minutos  = 0x00u;    /* BCD                     */
+static bool    alarme_ligado   = false;    /* espelho do bit A1IE     */
+static bool    alarme_tocando  = false;    /* disparou e não foi calado */
+static uint8_t alarme_segundos = 0;        /* há quanto tempo toca    */
+
+/* Espelho do que está ESCRITO na tela de hora, para atualizar só os
+ * dígitos que mudarem (ver tela_hora). 0xFF = desconhecido, força a
+ * primeira escrita.                                                  */
+static uint8_t exibido_horas    = 0xFFu;
+static uint8_t exibido_minutos  = 0xFFu;
+static uint8_t exibido_segundos = 0xFFu;
 
 /* Nomes dos dias da semana (1 = segunda ... 7 = domingo)             */
 static const char * const nome_dia[7] = {
@@ -158,10 +186,29 @@ static void linha_limpa(char *b)
 
 /* Tela 1 — hora e data:  |      14:35:27      |
  *                        |   QUA 16/07/2026   |                      */
-static void tela_hora(void)
+static void tela_hora(bool completo)
 {
     char b[VFD_COLUNAS + 1];
     const char *dia;
+
+    /* Atualização incremental: compara com o que JÁ ESTÁ na tela e
+     * reescreve só os dígitos diferentes. De 10:23:41 para 10:23:42
+     * muda um único caractere — os dois pontos e a data ficam
+     * intocados. É isso que elimina a piscada.                       */
+    if (!completo && rtc_presente) {
+        vfd_campo_bcd(0, 6,  hora_atual.horas,    exibido_horas);
+        vfd_campo_bcd(0, 9,  hora_atual.minutos,  exibido_minutos);
+        vfd_campo_bcd(0, 12, hora_atual.segundos, exibido_segundos);
+        exibido_horas    = hora_atual.horas;
+        exibido_minutos  = hora_atual.minutos;
+        exibido_segundos = hora_atual.segundos;
+        return;
+    }
+
+    /* Redesenho completo: o espelho passa a valer a partir de agora  */
+    exibido_horas    = hora_atual.horas;
+    exibido_minutos  = hora_atual.minutos;
+    exibido_segundos = hora_atual.segundos;
 
     linha_limpa(b);
     if (rtc_presente) {
@@ -221,6 +268,52 @@ static void tela_clima(void)
     vfd_linha(1, b);
 }
 
+/* Tela 3 — alarme:  |     ALARME 07:00   |
+ *                   |       LIGADO       |                          */
+static void tela_alarme(void)
+{
+    char b[VFD_COLUNAS + 1];
+
+    linha_limpa(b);
+    b[4] = 'A'; b[5] = 'L'; b[6] = 'A'; b[7] = 'R'; b[8] = 'M'; b[9] = 'E';
+    por_bcd(&b[11], alarme_horas);
+    b[13] = ':';
+    por_bcd(&b[14], alarme_minutos);
+    vfd_linha(0, b);
+
+    linha_limpa(b);
+    if (alarme_ligado) {
+        b[7] = 'L'; b[8] = 'I'; b[9] = 'G'; b[10] = 'A';
+        b[11] = 'D'; b[12] = 'O';
+    } else {
+        b[6] = 'D'; b[7] = 'E'; b[8] = 'S'; b[9] = 'L'; b[10] = 'I';
+        b[11] = 'G'; b[12] = 'A'; b[13] = 'D'; b[14] = 'O';
+    }
+    vfd_linha(1, b);
+}
+
+/* Tela do alarme DISPARADO — a 1ª linha pisca usando o atributo do
+ * próprio display (códigos 31h/32h), sem custo de tráfego serial.    */
+static void tela_alarme_tocando(void)
+{
+    char b[VFD_COLUNAS + 1];
+
+    linha_limpa(b);
+    b[3] = '*'; b[4] = '*'; b[5] = '*';
+    b[7] = 'A'; b[8] = 'L'; b[9] = 'A'; b[10] = 'R'; b[11] = 'M'; b[12] = 'E';
+    b[14] = '*'; b[15] = '*'; b[16] = '*';
+    vfd_piscar_inicio(VFD_BLINK_2HZ);
+    vfd_linha(0, b);
+    vfd_piscar_fim();
+
+    linha_limpa(b);
+    por_bcd(&b[5], alarme_horas);
+    b[7] = ':';
+    por_bcd(&b[8], alarme_minutos);
+    b[12] = '('; b[13] = 'B'; b[14] = 'T'; b[15] = 'N'; b[16] = '2'; b[17] = ')';
+    vfd_linha(1, b);
+}
+
 /* Aviso enquanto o RTC não tem hora confiável (OSF setado)           */
 static void tela_ajuste_pendente(void)
 {
@@ -249,6 +342,12 @@ static void montar_estado_usb(uint8_t r[USB_TAM_REPORT])
     }
     if (ha_medida) {
         r[0] |= USB_FLAG_SENSOR_OK;
+    }
+    if (alarme_ligado) {
+        r[0] |= USB_FLAG_ALARME_ON;
+    }
+    if (alarme_tocando) {
+        r[0] |= USB_FLAG_ALARME_TOCA;
     }
     r[1] = hora_atual.segundos;
     r[2] = hora_atual.minutos;
@@ -287,13 +386,87 @@ static bool acerto_valido(const uint8_t a[USB_TAM_REPORT])
  * ------------------------------------------------------------------ */
 void main(void)
 {
+    /* ================================================================
+     *  TESTE DE PREENCHIMENTO DO VFD — REMOVER PARA USO NORMAL
+     * ----------------------------------------------------------------
+     *  Exercita SÓ o caminho PIC -> USART -> SP232 -> display, sem
+     *  RTC, USB, alarme ou botões. Reproduz, a partir do PIC, o mesmo
+     *  que funcionou no teste manual pelo PL2303: limpa a tela (0x15) e
+     *  escreve padrões conhecidos nas duas linhas, repetindo a cada 3 s.
+     *
+     *  Como ler o resultado:
+     *   - padrões LIMPOS e nas posições certas -> o driver do display
+     *     está OK; o "quebrado" vem da lógica de cima (relógio/RTC) ou
+     *     do software-reset 0x14;
+     *   - padrões EMBARALHADOS -> é baud/temporização do USART (conferir
+     *     o cristal de 24 MHz e o SPBRG = 77);
+     *   - cada redesenho (a cada 3 s) DEVE ser idêntico ao anterior; se
+     *     variar, há bytes sendo perdidos (temporização).
+     *
+     *  De propósito NÃO chama vfd_iniciar(): usa só 0x15 (clear) e 0x0E
+     *  (cursor off), SEM o software-reset 0x14 — assim, se o vilão for o
+     *  0x14 (ex.: jumper de self-test), este teste passa e o aponta.
+     *
+     *  A guarda 'volatile' faz um while(1) que preserva a alocação de
+     *  RAM do resto do main (ver histórico: mesmo truque do heartbeat).
+     * ================================================================ */
+    {
+        static volatile uint8_t teste_vfd = 1u;
+        uint8_t i;
+
+        board_iniciar_pinos();
+        uart_iniciar();
+        __delay_ms(500);                 /* power-up de 500 ms do VFD  */
+        UART_TX(0x0Eu);                  /* cursor invisível           */
+
+        while (teste_vfd) {
+            /* Padrão A — régua de posições: dígitos em cima, letras
+             * embaixo. Mostra se algum caractere cai fora do lugar.   */
+            UART_TX(0x15u);                          /* clear + home   */
+            __delay_ms(5);
+            for (i = 0; i < VFD_COLUNAS; i++) {
+                UART_TX((uint8_t)('0' + (i % 10u))); /* 0123456789...  */
+            }
+            UART_TX(0x1Bu);
+            UART_TX(VFD_COLUNAS);                    /* -> linha 1, col 0 */
+            for (i = 0; i < VFD_COLUNAS; i++) {
+                UART_TX((uint8_t)('A' + i));         /* ABCDE...T      */
+            }
+            __delay_ms(3000);
+
+            /* Padrão B — 'U' (0x55, bits alternados = pior caso de
+             * baud) em cima; '8' (acende quase todos os pontos) embaixo. */
+            UART_TX(0x15u);
+            __delay_ms(5);
+            for (i = 0; i < VFD_COLUNAS; i++) {
+                UART_TX('U');
+            }
+            UART_TX(0x1Bu);
+            UART_TX(VFD_COLUNAS);
+            for (i = 0; i < VFD_COLUNAS; i++) {
+                UART_TX('8');
+            }
+            __delay_ms(3000);
+        }
+    }
+
     uint8_t seg_anterior   = 0xFFu;  /* força 1º redesenho            */
     uint8_t cont_tela      = 0;      /* segundos na tela corrente     */
-    bool    mostrando_hora = true;   /* qual tela está ativa          */
+    uint8_t tela           = TELA_HORA;            /* tela ativa      */
     uint8_t cont_sht       = SHT_PERIODO_SEGUNDOS; /* mede já no boot */
     uint8_t cont_msg_sync  = 0;      /* aviso de sincronização        */
+    uint8_t buzzer_fase    = 0;      /* padrão intermitente do buzzer */
+    bool    redesenhar     = false;  /* forçado por botão             */
+    uint8_t tela_desenhada = 0xFFu;  /* qual tela está pintada        */
+    bool    alarme_desenhado = false;/* tela de alarme já pintada     */
+    btn_evento_t evento;
     uint8_t acerto[USB_TAM_REPORT];
     uint8_t estado[USB_TAM_REPORT];  /* report montado a cada tick    */
+
+    /* Duração de cada tela no carrossel automático (índice = tela)   */
+    static const uint8_t tela_duracao[TELA_QUANTAS] = {
+        TELA_HORA_SEGUNDOS, TELA_CLIMA_SEGUNDOS, TELA_ALARME_SEGUNDOS
+    };
 
     /* ---- inicialização de hardware -------------------------------- */
     board_iniciar_pinos();
@@ -315,14 +488,68 @@ void main(void)
     vfd_linha(1, "  PIC16C745 v1.0");
 
     hora_valida = ds3231_hora_valida();
+    /* Recupera o alarme guardado na bateria do RTC (o PIC não tem
+     * EEPROM, então o DS3231 é a única memória não-volátil do
+     * projeto — ver comentário em ds3231.h).                         */
+    (void)ds3231_alarme_ler(&alarme_horas, &alarme_minutos, &alarme_ligado);
+    /* Descarta um disparo antigo: o RTC continua casando o horário na
+     * bateria com o aparelho desligado, então A1F pode estar setado de
+     * um alarme que já passou. Sem isto, ligar o relógio depois da
+     * hora do alarme faria ele tocar imediatamente.                  */
+    (void)ds3231_alarme_reconhecer();
     __delay_ms(1000);                /* splash rapidinho              */
 
     /* ---- laço principal ------------------------------------------- */
     for (;;) {
-        /* 1) Acerto de hora vindo do PC? (o stack USB deixa no
-         *    "correio"; consumimos aqui, fora da ISR)                */
+        /* 0) Botões: o debounce conta voltas do laço (~50 ms cada),
+         *    por isso botoes_processar() vem SEMPRE, uma vez por volta */
+        botoes_processar();
+
+        /* 0a) Botão 1 — avança a tela na hora, reiniciando o rodízio  */
+        if (botao_evento(BTN_TELA) != BTN_NADA) {
+            tela = (uint8_t)((tela + 1u) % TELA_QUANTAS);
+            cont_tela  = 0;
+            redesenhar = true;
+        }
+
+        /* 0b) Botão 2 — curto silencia; longo liga/desliga o alarme   */
+        evento = botao_evento(BTN_ALARME);
+        if (evento == BTN_CURTO) {
+            if (alarme_tocando) {
+                alarme_tocando = false;      /* cala e rearma p/ amanhã */
+                (void)ds3231_alarme_reconhecer();
+                BUZZER_DESLIGAR();
+                redesenhar = true;
+            }
+        } else if (evento == BTN_LONGO) {
+            alarme_ligado = !alarme_ligado;
+            (void)ds3231_alarme_habilitar(alarme_ligado);
+            if (!alarme_ligado && alarme_tocando) {
+                alarme_tocando = false;      /* desligar também cala    */
+                (void)ds3231_alarme_reconhecer();
+                BUZZER_DESLIGAR();
+            }
+            tela       = TELA_ALARME;        /* mostra o novo estado    */
+            cont_tela  = 0;
+            redesenhar = true;
+        }
+
+        /* 0c) Padrão sonoro: 200 ms ligado / 300 ms desligado         */
+        if (alarme_tocando) {
+            buzzer_fase = (uint8_t)((buzzer_fase + 1u) % 10u);
+            if (buzzer_fase < 4u) {
+                BUZZER_LIGAR();
+            } else {
+                BUZZER_DESLIGAR();
+            }
+        } else {
+            buzzer_fase = 0;
+        }
+
+        /* 1) Comando vindo do PC (o stack USB deixa no "correio";
+         *    consumimos aqui, fora da ISR)                            */
         if (usb_pegar_acerto(acerto)) {
-            if (acerto_valido(acerto)) {
+            if ((acerto[0] == USB_CMD_ACERTAR_RTC) && acerto_valido(acerto)) {
                 ds3231_hora_t nova;
 
                 nova.segundos   = acerto[1];
@@ -334,11 +561,29 @@ void main(void)
                 nova.ano        = acerto[7];
 
                 if (ds3231_gravar(&nova)) {
-                    hora_valida   = true;
-                    cont_msg_sync = MSG_SYNC_SEGUNDOS;
+                    hora_valida    = true;
+                    cont_msg_sync  = MSG_SYNC_SEGUNDOS;
                     tela_sincronizada();
-                    seg_anterior  = 0xFFu;   /* redesenha ao sair     */
+                    seg_anterior   = 0xFFu;  /* redesenha ao sair     */
+                    tela_desenhada = 0xFFu;
                 }
+            } else if ((acerto[0] == USB_CMD_CONFIG_ALARME) &&
+                       bcd_ok(acerto[1], 0x23u) &&
+                       bcd_ok(acerto[2], 0x59u)) {
+                alarme_horas   = acerto[1];
+                alarme_minutos = acerto[2];
+                alarme_ligado  = (acerto[3] != 0u);
+                (void)ds3231_alarme_gravar(alarme_horas, alarme_minutos);
+                (void)ds3231_alarme_habilitar(alarme_ligado);
+                tela       = TELA_ALARME;    /* confirma na tela       */
+                cont_tela  = 0;
+                redesenhar = true;
+            } else if (acerto[0] == USB_CMD_LIGA_ALARME) {
+                alarme_ligado = (acerto[1] != 0u);
+                (void)ds3231_alarme_habilitar(alarme_ligado);
+                tela       = TELA_ALARME;
+                cont_tela  = 0;
+                redesenhar = true;
             }
         }
 
@@ -348,49 +593,87 @@ void main(void)
         if (rtc_presente && (hora_atual.segundos != seg_anterior)) {
             seg_anterior = hora_atual.segundos;
 
-            /* 2a) Medição periódica do SHT15 (bloqueia ~0,4 s; USB
+            /* 2a) O alarme disparou? O flag A1F é LATCHED no DS3231,
+             *     então basta consultá-lo 1x por segundo — nenhum
+             *     disparo se perde e o pino INT/SQW fica dispensável. */
+            if (alarme_ligado && !alarme_tocando &&
+                ds3231_alarme_disparou()) {
+                alarme_tocando  = true;
+                alarme_segundos = 0;
+            }
+
+            /* 2b) Segurança: para de tocar sozinho após alguns
+             *     minutos, caso não haja ninguém para apertar o botão */
+            if (alarme_tocando) {
+                alarme_segundos++;
+                if (alarme_segundos >= ALARME_MAX_SEGUNDOS) {
+                    alarme_tocando = false;
+                    (void)ds3231_alarme_reconhecer();
+                    BUZZER_DESLIGAR();
+                    tela_desenhada = 0xFFu;  /* repinta ao voltar      */
+                }
+            }
+
+            /* 2c) Medição periódica do SHT15 (bloqueia ~0,4 s; USB
              *     continua vivo pela ISR)                            */
             cont_sht++;
             if (cont_sht >= SHT_PERIODO_SEGUNDOS) {
                 cont_sht = 0;
                 if (sht1x_medir(&medida)) {
-                    ha_medida = true;
+                    ha_medida  = true;
+                    redesenhar = true;   /* valores novos na tela clima */
                 }
                 /* Em falha mantém a última medida boa; 'ha_medida'
                  * só é falso até a primeira leitura bem-sucedida.    */
             }
 
-            /* 2b) Enquanto o aviso de sincronização está na tela,
-             *     só decrementa o contador                           */
-            if (cont_msg_sync != 0u) {
-                cont_msg_sync--;
-                montar_estado_usb(estado);
-                usb_atualizar_estado(estado);
-                continue;
-            }
-
-            /* 2c) Alternância das telas                              */
-            cont_tela++;
-            if (mostrando_hora &&
-                (cont_tela >= TELA_HORA_SEGUNDOS)) {
-                mostrando_hora = false;
-                cont_tela = 0;
-            } else if (!mostrando_hora &&
-                       (cont_tela >= TELA_CLIMA_SEGUNDOS)) {
-                mostrando_hora = true;
-                cont_tela = 0;
-            }
-
-            /* 2d) Desenho                                            */
-            if (mostrando_hora) {
-                if (hora_valida) {
-                    tela_hora();
-                } else {
-                    tela_ajuste_pendente();
+            /* 2d) Escolha e desenho da tela.
+             * 'completo' controla se a tela é repintada por inteiro.
+             * Repintar só quando algo estrutural muda (troca de tela,
+             * nova medição, alarme) elimina a piscada de 1 em 1 s.   */
+            if (alarme_tocando) {
+                /* O alarme tem prioridade sobre todo o carrossel     */
+                if (!alarme_desenhado) {
+                    tela_alarme_tocando();
+                    alarme_desenhado = true;
+                }
+            } else if (cont_msg_sync != 0u) {
+                cont_msg_sync--;         /* mantém o aviso de sync     */
+                if (cont_msg_sync == 0u) {
+                    tela_desenhada = 0xFFu;  /* repinta ao voltar      */
                 }
             } else {
-                tela_clima();
+                bool completo = redesenhar;
+
+                /* Carrossel automático                               */
+                cont_tela++;
+                if (cont_tela >= tela_duracao[tela]) {
+                    tela = (uint8_t)((tela + 1u) % TELA_QUANTAS);
+                    cont_tela = 0;
+                }
+                if (tela != tela_desenhada) {
+                    tela_desenhada = tela;
+                    completo = true;     /* mudou de tela: repinta     */
+                }
+
+                if (tela == TELA_CLIMA) {
+                    if (completo) {
+                        tela_clima();    /* valores mudam a cada 30 s  */
+                    }
+                } else if (tela == TELA_ALARME) {
+                    if (completo) {
+                        tela_alarme();   /* estático até algo mudar    */
+                    }
+                } else if (hora_valida) {
+                    tela_hora(completo); /* só os dígitos, se possível */
+                } else if (completo) {
+                    tela_ajuste_pendente();
+                }
             }
+            if (!alarme_tocando) {
+                alarme_desenhado = false;
+            }
+            redesenhar = false;
 
             /* 2e) Report USB sempre fresco para o PC                 */
             montar_estado_usb(estado);
@@ -398,7 +681,24 @@ void main(void)
         } else if (!rtc_presente && (seg_anterior != 0xFEu)) {
             /* RTC sumiu do barramento: mostra o aviso uma única vez  */
             seg_anterior = 0xFEu;
-            tela_hora();
+            tela_hora(true);
+        } else if (redesenhar) {
+            /* Botão/comando pediu troca de tela fora do tick de 1 s:
+             * redesenha na hora, para a resposta parecer instantânea */
+            redesenhar = false;
+            tela_desenhada = tela;
+            if (alarme_tocando) {
+                tela_alarme_tocando();
+                alarme_desenhado = true;
+            } else if (tela == TELA_CLIMA) {
+                tela_clima();
+            } else if (tela == TELA_ALARME) {
+                tela_alarme();
+            } else if (hora_valida) {
+                tela_hora(true);
+            } else {
+                tela_ajuste_pendente();
+            }
         }
 
         /* 3) Cadência do laço: ~20 leituras de RTC por segundo dão

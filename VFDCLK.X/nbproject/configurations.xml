@@ -12,6 +12,7 @@
       <itemPath>sht1x.h</itemPath>
       <itemPath>usb_desc.h</itemPath>
       <itemPath>usb_hid.h</itemPath>
+      <itemPath>botoes.h</itemPath>
     </logicalFolder>
     <logicalFolder name="ExternalFiles"
                    displayName="Important Files"
@@ -33,6 +34,7 @@
       <itemPath>sht1x.c</itemPath>
       <itemPath>usb_desc.c</itemPath>
       <itemPath>usb_hid.c</itemPath>
+      <itemPath>botoes.c</itemPath>
     </logicalFolder>
   </logicalFolder>
   <projectmakefile>Makefile</projectmakefile>

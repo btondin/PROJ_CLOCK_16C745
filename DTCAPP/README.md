@@ -14,20 +14,37 @@ pip install -r requirements.txt
 
 ## Uso
 
-1. Conecte o relógio VFD numa porta USB (ele enumera como dispositivo
-   HID, sem precisar de driver).
-2. Execute:
+Conecte o relógio VFD numa porta USB (ele enumera como dispositivo HID,
+sem precisar de driver) e rode:
 
 ```
-python dtc_sync.py
+python dtc_sync.py                 # sincroniza a hora do PC (padrão)
+python dtc_sync.py --status        # só mostra o estado, sem alterar
+python dtc_sync.py --alarme 07:30  # programa o alarme diário e liga
+python dtc_sync.py --alarme on     # liga o alarme (mantém o horário)
+python dtc_sync.py --alarme off    # desliga o alarme
 ```
 
-O script envia a hora local do PC, o firmware grava no DS3231 e o
-display mostra "HORA SINCRONIZADA". Em seguida o script lê de volta a
-hora, a temperatura e a umidade do relógio como confirmação.
+Ao sincronizar, o script envia a hora local, o firmware grava no DS3231
+e o display mostra "HORA SINCRONIZADA". Em seguida ele lê de volta a
+hora, temperatura, umidade e o estado do alarme como confirmação.
+
+**O alarme fica guardado no próprio DS3231** (registradores alimentados
+pela bateria), então sobrevive a quedas de energia — o PIC16C745 é OTP e
+não tem EEPROM onde guardar configuração.
+
+Também dá para operar o alarme pelos **botões** do aparelho: o botão 2
+silencia com um toque curto e liga/desliga com um toque longo (~2 s).
 
 Códigos de saída: `0` sucesso · `1` dispositivo não encontrado ·
-`2` falta a biblioteca `hid` · `3/4` falha na comunicação.
+`2` falta a biblioteca `hid` · `3/4` falha na comunicação ·
+`5` horário de alarme inválido.
+
+> **Windows:** se `python` abrir a Microsoft Store, use o caminho
+> completo do interpretador, por exemplo
+> `& "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe" dtc_sync.py`,
+> ou desative os *aliases de execução* em Configurações → Aplicativos.
+> Rode `chcp 65001` antes para os acentos aparecerem corretamente.
 
 ## teste_conversao.py
 

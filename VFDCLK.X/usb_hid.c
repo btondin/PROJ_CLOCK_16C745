@@ -306,8 +306,12 @@ static void ep0_saida_processar(void)
             for (i = 0; i < n; i++) {
                 acerto_rx[i] = EP0_SAIDA[i];
             }
+            /* Aceita qualquer comando conhecido (acerto de hora ou
+             * configuração de alarme); quem interpreta o byte [0] é o
+             * laço principal, via usb_pegar_acerto().                */
             if ((n == USB_TAM_REPORT) &&
-                (acerto_rx[0] == USB_CMD_ACERTAR_RTC)) {
+                (acerto_rx[0] >= USB_CMD_ACERTAR_RTC) &&
+                (acerto_rx[0] <= USB_CMD_LIGA_ALARME)) {
                 ha_acerto = true;    /* main consome via usb_pegar... */
             }
             ep0_armar_status_in();   /* confirma com ZLP IN           */

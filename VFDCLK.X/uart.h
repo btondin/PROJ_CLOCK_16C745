@@ -3,7 +3,7 @@
  *  uart.h — USART do PIC16C745 em modo assíncrono, somente transmissão
  * =====================================================================
  *  Usado exclusivamente para alimentar a entrada serial do display VFD
- *  (IEE 036X2, 9600 baud, 8N1). Não há recepção neste projeto.
+ *  (IEE 036X2, 19200 baud, 8N1). Não há recepção neste projeto.
  * =====================================================================
  */
 #ifndef UART_H
@@ -12,11 +12,11 @@
 #include <xc.h>
 #include <stdint.h>
 
-/* Configura o USART para 9600 baud, 8 bits, sem paridade, 1 stop. */
+/* Configura o USART para 19200 baud, 8 bits, sem paridade, 1 stop. */
 void uart_iniciar(void);
 
 /* Transmite um byte, bloqueando até o registrador TXREG liberar.
- * A 9600 baud cada byte leva ~1,04 ms na linha.                     */
+ * A 19200 baud cada byte leva 521 us na linha.                      */
 void uart_enviar(uint8_t byte);
 
 /* Versão em MACRO da transmissão, para uso dentro do driver do VFD:

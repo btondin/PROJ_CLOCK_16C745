@@ -2,37 +2,45 @@
 # -*- coding: utf-8 -*-
 """
 =======================================================================
- dtc_sync.py — Acerta o RTC do relógio VFD (PIC16C745) pela porta USB
+ dtc_sync.py — Acerta o RTC e o alarme do relógio VFD (PIC16C745)
 =======================================================================
-Uso (manual, sempre que quiser sincronizar):
+Uso (manual, sempre que quiser):
 
-    python dtc_sync.py
+    python dtc_sync.py                 # sincroniza a hora do PC (padrão)
+    python dtc_sync.py --status        # só mostra o estado do relógio
+    python dtc_sync.py --alarme 07:30  # programa o alarme e liga
+    python dtc_sync.py --alarme on     # liga o alarme (mantém horário)
+    python dtc_sync.py --alarme off    # desliga o alarme
 
 O dispositivo enumera como HID genérico (VID 0x1209 / PID 0x0001,
-produto "VFDCLK 16C745"), portanto NÃO precisa de driver. O script:
+produto "VFDCLK 16C745"), portanto NÃO precisa de driver.
 
- 1. localiza o dispositivo;
- 2. envia um "report de saída" de 8 bytes com a hora local do PC
-    (o firmware grava no DS3231 e limpa a flag de hora inválida);
- 3. lê de volta o "report de entrada" e mostra a hora, a temperatura
-    e a umidade que o relógio está medindo, como confirmação.
+Formato do report de SAÍDA (PC -> dispositivo), 8 bytes:
+    [0] = 0x01  acertar RTC
+          [1] segundos  [2] minutos  [3] horas (BCD, 24 h)
+          [4] dia da semana 1..7 (1 = segunda, binário)
+          [5] dia  [6] mês  [7] ano (BCD, século 20xx)
+    [0] = 0x02  configurar alarme diário
+          [1] horas BCD  [2] minutos BCD  [3] 1 = habilita / 0 = não
+    [0] = 0x03  habilitar/desabilitar alarme
+          [1] 1 = liga / 0 = desliga
 
-Formato do report de SAÍDA (PC -> dispositivo), tudo BCD exceto [4]:
-    [0] 0x01 = comando "acertar RTC"
-    [1] segundos  [2] minutos  [3] horas (24 h)
-    [4] dia da semana 1..7 (1 = segunda ... 7 = domingo, binário)
-    [5] dia       [6] mês     [7] ano (duas casas, século 20xx)
-
-Formato do report de ENTRADA (dispositivo -> PC):
-    [0] flags: bit0 = hora válida no RTC, bit1 = leitura do SHT15 ok
+Formato do report de ENTRADA (dispositivo -> PC), 8 bytes:
+    [0] flags: bit0 hora válida, bit1 sensor ok,
+               bit2 alarme habilitado, bit3 alarme tocando
     [1] segundos  [2] minutos  [3] horas (BCD)
     [4..5] temperatura em décimos de °C (int16 little-endian)
     [6..7] umidade em décimos de %RH (uint16 little-endian)
+
+O alarme fica guardado nos registradores do DS3231, alimentados pela
+bateria — sobrevive a quedas de energia sem precisar de EEPROM (o
+PIC16C745 não tem nenhuma).
 
 Dependência: hidapi  ->  pip install -r requirements.txt
 =======================================================================
 """
 
+import argparse
 import sys
 import time
 from datetime import datetime
@@ -49,8 +57,13 @@ PID = 0x0001
 PRODUTO = "VFDCLK"    # início do nome do produto anunciado via USB
 
 CMD_ACERTAR_RTC = 0x01
+CMD_CONFIG_ALARME = 0x02
+CMD_LIGA_ALARME = 0x03
+
 FLAG_HORA_VALIDA = 0x01
 FLAG_SENSOR_OK = 0x02
+FLAG_ALARME_ON = 0x04
+FLAG_ALARME_TOCA = 0x08
 
 
 def para_bcd(valor: int) -> int:
@@ -72,10 +85,48 @@ def achar_dispositivo():
     return None
 
 
-def montar_report_de_acerto(agora: datetime) -> bytes:
-    """Monta o report de saída (9 bytes: report ID 0 + 8 de dados)."""
-    return bytes([
-        0x00,                          # report ID (0 = sem numeração)
+def enviar(dispositivo, dados: list) -> bool:
+    """Envia um report de saída (report ID 0 + 8 bytes de dados)."""
+    pacote = bytes([0x00] + dados + [0] * (8 - len(dados)))
+    return dispositivo.write(pacote) > 0
+
+
+def mostrar_estado(dispositivo, espera_s: float = 1.2) -> int:
+    """Lê o report de entrada e imprime o estado. Devolve as flags."""
+    time.sleep(espera_s)  # o firmware republica o report a cada segundo
+    dados = dispositivo.read(8, timeout_ms=2000)
+    if not dados:
+        print("AVISO: sem resposta de leitura do dispositivo.")
+        return -1
+
+    flags = dados[0]
+    hh, mm, ss = de_bcd(dados[3]), de_bcd(dados[2]), de_bcd(dados[1])
+    temp = int.from_bytes(bytes(dados[4:6]), "little", signed=True)
+    umid = int.from_bytes(bytes(dados[6:8]), "little", signed=False)
+
+    print("Estado do relógio:")
+    print(f"  Hora do RTC : {hh:02d}:{mm:02d}:{ss:02d} "
+          f"({'válida' if flags & FLAG_HORA_VALIDA else 'INVÁLIDA'})")
+    if flags & FLAG_SENSOR_OK:
+        print(f"  Temperatura : {temp / 10:.1f} °C")
+        print(f"  Umidade     : {umid / 10:.1f} %RH")
+    else:
+        print("  Sensor SHT15: sem leitura válida ainda")
+    print(f"  Alarme      : {'LIGADO' if flags & FLAG_ALARME_ON else 'desligado'}"
+          f"{'  *** TOCANDO ***' if flags & FLAG_ALARME_TOCA else ''}")
+    return flags
+
+
+def acao_sincronizar(dispositivo) -> int:
+    """Envia a hora local do PC, alinhada com a virada do segundo."""
+    agora = datetime.now()
+    alvo_seg = agora.second
+    # Espera a virada do segundo para o RTC ficar alinhado (< 50 ms).
+    while datetime.now().second == alvo_seg:
+        time.sleep(0.005)
+    agora = datetime.now()
+
+    ok = enviar(dispositivo, [
         CMD_ACERTAR_RTC,
         para_bcd(agora.second),
         para_bcd(agora.minute),
@@ -85,9 +136,68 @@ def montar_report_de_acerto(agora: datetime) -> bytes:
         para_bcd(agora.month),
         para_bcd(agora.year % 100),
     ])
+    if not ok:
+        print("ERRO: falha ao enviar o report de acerto.")
+        return 3
+
+    print(f"Hora enviada ao relógio: "
+          f"{agora.strftime('%A %d/%m/%Y %H:%M:%S')}")
+
+    flags = mostrar_estado(dispositivo)
+    if flags < 0:
+        print("(O acerto provavelmente funcionou.)")
+        return 0
+    if flags & FLAG_HORA_VALIDA:
+        print("Sincronização concluída com sucesso.")
+        return 0
+    print("ERRO: o relógio não confirmou a hora como válida.")
+    return 4
+
+
+def acao_alarme(dispositivo, valor: str) -> int:
+    """Configura o alarme: 'HH:MM', 'on' ou 'off'."""
+    texto = valor.strip().lower()
+
+    if texto in ("on", "ligar", "liga"):
+        if not enviar(dispositivo, [CMD_LIGA_ALARME, 1]):
+            print("ERRO: falha ao enviar o comando.")
+            return 3
+        print("Alarme LIGADO (horário mantido).")
+    elif texto in ("off", "desligar", "desliga"):
+        if not enviar(dispositivo, [CMD_LIGA_ALARME, 0]):
+            print("ERRO: falha ao enviar o comando.")
+            return 3
+        print("Alarme DESLIGADO.")
+    else:
+        try:
+            partes = texto.split(":")
+            hora, minuto = int(partes[0]), int(partes[1])
+            if not (0 <= hora <= 23 and 0 <= minuto <= 59):
+                raise ValueError
+        except (ValueError, IndexError):
+            print(f"ERRO: horário inválido '{valor}'. "
+                  "Use HH:MM (ex.: 07:30), 'on' ou 'off'.")
+            return 5
+
+        if not enviar(dispositivo,
+                      [CMD_CONFIG_ALARME, para_bcd(hora), para_bcd(minuto), 1]):
+            print("ERRO: falha ao enviar o comando.")
+            return 3
+        print(f"Alarme programado para {hora:02d}:{minuto:02d} e LIGADO.")
+
+    mostrar_estado(dispositivo)
+    return 0
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(
+        description="Acerta a hora e o alarme do relógio VFD (PIC16C745).")
+    ap.add_argument("--alarme", metavar="HH:MM|on|off",
+                    help="programa o alarme diário, ou liga/desliga")
+    ap.add_argument("--status", action="store_true",
+                    help="apenas mostra o estado atual, sem alterar nada")
+    args = ap.parse_args()
+
     caminho = achar_dispositivo()
     if caminho is None:
         print("Relógio VFD não encontrado no USB.")
@@ -98,57 +208,11 @@ def main() -> int:
     dispositivo = hid.device()
     dispositivo.open_path(caminho)
     try:
-        # ------------------------------------------------------------
-        # 1) Envia a hora local. Espera a virada do segundo para o
-        #    RTC ficar alinhado com o PC com erro < 50 ms.
-        # ------------------------------------------------------------
-        agora = datetime.now()
-        alvo = agora.replace(microsecond=0)
-        while datetime.now() < alvo.replace(microsecond=999999):
-            if datetime.now().second != alvo.second:
-                break
-            time.sleep(0.005)
-        agora = datetime.now()
-
-        report = montar_report_de_acerto(agora)
-        escritos = dispositivo.write(report)
-        if escritos <= 0:
-            print("ERRO: falha ao enviar o report de acerto.")
-            return 3
-
-        print(f"Hora enviada ao relógio: "
-              f"{agora.strftime('%A %d/%m/%Y %H:%M:%S')}")
-
-        # ------------------------------------------------------------
-        # 2) Lê o estado de volta (o firmware atualiza o report de
-        #    entrada a cada segundo; 2 s de tolerância).
-        # ------------------------------------------------------------
-        time.sleep(1.2)  # dá tempo do firmware gravar e re-publicar
-        dados = dispositivo.read(8, timeout_ms=2000)
-        if not dados:
-            print("AVISO: hora enviada, mas sem resposta de leitura. "
-                  "(O acerto provavelmente funcionou.)")
-            return 0
-
-        flags = dados[0]
-        hh, mm, ss = de_bcd(dados[3]), de_bcd(dados[2]), de_bcd(dados[1])
-        temp = int.from_bytes(bytes(dados[4:6]), "little", signed=True)
-        umid = int.from_bytes(bytes(dados[6:8]), "little", signed=False)
-
-        print("Resposta do relógio:")
-        print(f"  Hora do RTC : {hh:02d}:{mm:02d}:{ss:02d} "
-              f"({'válida' if flags & FLAG_HORA_VALIDA else 'INVÁLIDA'})")
-        if flags & FLAG_SENSOR_OK:
-            print(f"  Temperatura : {temp / 10:.1f} °C")
-            print(f"  Umidade     : {umid / 10:.1f} %RH")
-        else:
-            print("  Sensor SHT15: sem leitura válida ainda")
-
-        if flags & FLAG_HORA_VALIDA:
-            print("Sincronização concluída com sucesso.")
-            return 0
-        print("ERRO: o relógio não confirmou a hora como válida.")
-        return 4
+        if args.status:
+            return 0 if mostrar_estado(dispositivo, espera_s=0.1) >= 0 else 4
+        if args.alarme:
+            return acao_alarme(dispositivo, args.alarme)
+        return acao_sincronizar(dispositivo)
     finally:
         dispositivo.close()
 

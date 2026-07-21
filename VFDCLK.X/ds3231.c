@@ -26,10 +26,21 @@
 #define DS3231_END_LEITURA  0xD1u    /* 0x68 << 1 | 1 (read)          */
 
 #define DS3231_REG_SEGUNDOS 0x00u
+#define DS3231_REG_ALARME1  0x07u    /* 07h..0Ah: seg/min/hora/dia    */
 #define DS3231_REG_CONTROLE 0x0Eu
 #define DS3231_REG_STATUS   0x0Fu
 
 #define DS3231_STATUS_OSF   0x80u    /* Oscillator Stop Flag (bit 7)  */
+#define DS3231_STATUS_A1F   0x01u    /* Alarme 1 disparou (bit 0)     */
+
+#define DS3231_CTRL_A1IE    0x01u    /* habilita o Alarme 1           */
+#define DS3231_CTRL_INTCN   0x04u    /* INT/SQW em modo interrupção   */
+#define DS3231_CTRL_EOSC    0x80u    /* 0 = oscilador ativo em VBAT   */
+
+/* Máscara do Alarme 1 para disparo DIÁRIO em hora:minuto:segundo:
+ * A1M1=A1M2=A1M3=0 (casa segundos, minutos e horas) e A1M4=1
+ * (ignora dia/data) — ver tabela "Alarm Mask Bits" do datasheet.     */
+#define DS3231_A1M4_IGNORA_DIA  0x80u
 
 /* ------------------------------------------------------------------
  * API pública
@@ -76,6 +87,8 @@ bool ds3231_ler(ds3231_hora_t *hora)
 bool ds3231_gravar(const ds3231_hora_t *hora)
 {
     bool ok;
+    uint8_t controle;
+    uint8_t status;
 
     /* Escreve 00h..06h em rajada (auto-incremento do ponteiro).      */
     i2c_start();
@@ -94,17 +107,35 @@ bool ds3231_gravar(const ds3231_hora_t *hora)
         return false;
     }
 
-    /* Controle (0Eh): EOSC=0 (oscilador sempre ativo, inclusive em
-     * VBAT), sem onda quadrada nem alarmes (INTCN=1 -> SQW inativo).
-     * Status (0Fh): zera OSF — a partir de agora a hora é válida
-     * (OSF só aceita escrita de 0; os demais bits zerados são
-     * inócuos, alarmes não são usados neste projeto).
+    /* Controle (0Eh) e status (0Fh) por LEITURA-MODIFICAÇÃO-ESCRITA:
+     * é essencial preservar o bit A1IE, senão acertar a hora
+     * desabilitaria silenciosamente o alarme do usuário.
+     * - controle: força EOSC=0 (oscilador ativo também em VBAT) e
+     *   INTCN=1 (INT/SQW em modo interrupção), preservando A1IE/A2IE;
+     * - status  : zera OSF (a hora passa a ser confiável). OSF só
+     *   aceita escrita de 0, então reescrever o valor lido é seguro.
      * O ponteiro auto-incrementa de 0Eh para 0Fh: uma transação só.  */
     i2c_start();
     ok  = i2c_escrever(DS3231_END_ESCRITA);
     ok &= i2c_escrever(DS3231_REG_CONTROLE);
-    ok &= i2c_escrever(0x04u);       /* 0Eh: INTCN=1                  */
-    ok &= i2c_escrever(0x00u);       /* 0Fh: OSF=0                    */
+    i2c_start();
+    ok &= i2c_escrever(DS3231_END_LEITURA);
+    controle = i2c_ler(I2C_ACK);
+    status   = i2c_ler(I2C_NACK);
+    i2c_stop();
+
+    if (!ok) {
+        return false;
+    }
+
+    controle = (uint8_t)((controle & ~DS3231_CTRL_EOSC) | DS3231_CTRL_INTCN);
+    status   = (uint8_t)(status & ~DS3231_STATUS_OSF);
+
+    i2c_start();
+    ok  = i2c_escrever(DS3231_END_ESCRITA);
+    ok &= i2c_escrever(DS3231_REG_CONTROLE);
+    ok &= i2c_escrever(controle);    /* 0Eh                           */
+    ok &= i2c_escrever(status);      /* 0Fh                           */
     i2c_stop();
 
     return ok;
@@ -127,4 +158,164 @@ bool ds3231_hora_valida(void)
         return false;                /* sem resposta = não confiável  */
     }
     return (status & DS3231_STATUS_OSF) == 0;
+}
+
+/* ==================================================================
+ *  ALARME DIÁRIO (Alarme 1)
+ * ================================================================== */
+
+bool ds3231_alarme_gravar(uint8_t horas_bcd, uint8_t minutos_bcd)
+{
+    bool ok;
+
+    /* Registradores 07h..0Ah em rajada:
+     *   07h = segundos 00 com A1M1=0   -> casa "segundo == 00"
+     *   08h = minutos  com A1M2=0      -> casa os minutos
+     *   09h = horas    com A1M3=0      -> casa as horas (bit6=0: 24h)
+     *   0Ah = A1M4=1                   -> ignora dia/data
+     * Resultado: dispara uma vez por dia, em hh:mm:00.               */
+    i2c_start();
+    ok  = i2c_escrever(DS3231_END_ESCRITA);
+    ok &= i2c_escrever(DS3231_REG_ALARME1);
+    ok &= i2c_escrever(0x00u);
+    ok &= i2c_escrever((uint8_t)(minutos_bcd & 0x7Fu));
+    ok &= i2c_escrever((uint8_t)(horas_bcd & 0x3Fu));
+    ok &= i2c_escrever(DS3231_A1M4_IGNORA_DIA);
+    i2c_stop();
+
+    return ok;
+}
+
+bool ds3231_alarme_ler(uint8_t *horas_bcd, uint8_t *minutos_bcd,
+                       bool *habilitado)
+{
+    bool ok;
+    uint8_t controle;
+
+    /* 1) horário programado (07h..0Ah)                               */
+    i2c_start();
+    ok  = i2c_escrever(DS3231_END_ESCRITA);
+    ok &= i2c_escrever(DS3231_REG_ALARME1);
+    i2c_start();
+    ok &= i2c_escrever(DS3231_END_LEITURA);
+
+    if (!ok) {
+        i2c_stop();
+        return false;
+    }
+
+    (void)i2c_ler(I2C_ACK);                            /* 07h seg     */
+    *minutos_bcd = (uint8_t)(i2c_ler(I2C_ACK) & 0x7Fu); /* 08h min    */
+    *horas_bcd   = (uint8_t)(i2c_ler(I2C_ACK) & 0x3Fu); /* 09h hora   */
+    (void)i2c_ler(I2C_NACK);                           /* 0Ah máscara */
+    i2c_stop();
+
+    /* 2) habilitação: bit A1IE do registrador de controle            */
+    i2c_start();
+    ok  = i2c_escrever(DS3231_END_ESCRITA);
+    ok &= i2c_escrever(DS3231_REG_CONTROLE);
+    i2c_start();
+    ok &= i2c_escrever(DS3231_END_LEITURA);
+    controle = i2c_ler(I2C_NACK);
+    i2c_stop();
+
+    *habilitado = ((controle & DS3231_CTRL_A1IE) != 0u);
+    return ok;
+}
+
+bool ds3231_alarme_habilitar(bool ligar)
+{
+    bool ok;
+    uint8_t controle;
+    uint8_t status;
+
+    /* Controle (0Eh) e status (0Fh) são adjacentes: uma leitura em
+     * rajada pega os dois, e uma escrita em rajada devolve os dois.
+     * (Aberto "na mão", sem sub-rotinas, para não gastar níveis da
+     *  pilha de hardware — ver nota no topo deste arquivo.)          */
+    i2c_start();
+    ok  = i2c_escrever(DS3231_END_ESCRITA);
+    ok &= i2c_escrever(DS3231_REG_CONTROLE);
+    i2c_start();
+    ok &= i2c_escrever(DS3231_END_LEITURA);
+    controle = i2c_ler(I2C_ACK);
+    status   = i2c_ler(I2C_NACK);
+    i2c_stop();
+
+    if (!ok) {
+        return false;
+    }
+
+    /* Mexe só no A1IE, preservando EOSC, RS, A2IE...                 */
+    if (ligar) {
+        controle |= DS3231_CTRL_A1IE;
+    } else {
+        controle = (uint8_t)(controle & ~DS3231_CTRL_A1IE);
+    }
+    controle |= DS3231_CTRL_INTCN;   /* garante modo interrupção      */
+
+    /* IMPORTANTE: o datasheet diz que A1F é setado a CADA casamento
+     * de horário, INDEPENDENTE de A1IE — o bit A1IE só decide se o
+     * pino INT/SQW também é acionado. Ou seja, um alarme "desligado"
+     * continua deixando A1F em 1 quando seu horário passa.
+     * Se esse resto não fosse limpo aqui, habilitar o alarme mais
+     * tarde faria o firmware enxergar um disparo obsoleto e tocar na
+     * hora errada. Trocar o estado do alarme sempre começa do zero.  */
+    status = (uint8_t)(status & ~DS3231_STATUS_A1F);
+
+    i2c_start();
+    ok  = i2c_escrever(DS3231_END_ESCRITA);
+    ok &= i2c_escrever(DS3231_REG_CONTROLE);
+    ok &= i2c_escrever(controle);    /* 0Eh                           */
+    ok &= i2c_escrever(status);      /* 0Fh                           */
+    i2c_stop();
+
+    return ok;
+}
+
+bool ds3231_alarme_disparou(void)
+{
+    bool ok;
+    uint8_t status;
+
+    i2c_start();
+    ok  = i2c_escrever(DS3231_END_ESCRITA);
+    ok &= i2c_escrever(DS3231_REG_STATUS);
+    i2c_start();
+    ok &= i2c_escrever(DS3231_END_LEITURA);
+    status = i2c_ler(I2C_NACK);
+    i2c_stop();
+
+    if (!ok) {
+        return false;
+    }
+    return (status & DS3231_STATUS_A1F) != 0u;
+}
+
+bool ds3231_alarme_reconhecer(void)
+{
+    bool ok;
+    uint8_t status;
+
+    /* Zera apenas A1F. Reescrever OSF com o valor lido é inofensivo:
+     * esse bit só aceita escrita de 0, logo escrever 1 não o altera. */
+    i2c_start();
+    ok  = i2c_escrever(DS3231_END_ESCRITA);
+    ok &= i2c_escrever(DS3231_REG_STATUS);
+    i2c_start();
+    ok &= i2c_escrever(DS3231_END_LEITURA);
+    status = i2c_ler(I2C_NACK);
+    i2c_stop();
+
+    if (!ok) {
+        return false;
+    }
+
+    i2c_start();
+    ok  = i2c_escrever(DS3231_END_ESCRITA);
+    ok &= i2c_escrever(DS3231_REG_STATUS);
+    ok &= i2c_escrever((uint8_t)(status & ~DS3231_STATUS_A1F));
+    i2c_stop();
+
+    return ok;
 }

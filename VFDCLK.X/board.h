@@ -31,6 +31,9 @@
  *    22   RB1         SCL do DS3231 (push-pull via sombra de PORTB)
  *    23   RB2         DATA do SHT15 (open-drain via TRIS, pull-up 10k)
  *    24   RB3         SCK  do SHT15 (push-pull via sombra de PORTB)
+ *    2    RA0         BOTÃO 1 (troca de tela) — p/ GND, pull-up 10k
+ *    3    RA1         BOTÃO 2 (alarme)        — p/ GND, pull-up 10k
+ *    13   RC2         BUZZER (via transistor NPN; nível 1 = tocando)
  *    1    MCLR        pull-up 10k (reset externo opcional)
  *   demais RA/RB/RC   livres
  *
@@ -108,6 +111,28 @@ extern volatile uint8_t portb_sombra;
 /* Meio-período do clock do SHT15 (datasheet: fSCK max 10 MHz a 5 V;
  * 5 us por nível é conservador e igual ao sample code oficial).      */
 #define SHT_MEIO_PERIODO_US 5
+
+/* ------------------------------------------------------------------
+ * Botões (PORTA) e buzzer (PORTC)
+ * ------------------------------------------------------------------
+ * Os botões ficam no PORTA para não gerar escritas no PORTB, que é
+ * reservado aos barramentos bit-bang. RA0/RA1 já saem digitais porque
+ * board_iniciar_pinos() escreve ADCON1 = 0x07.
+ *
+ * O buzzer é o único pino de saída do PORTC (RC6/TX pertence ao USART
+ * e RC4/RC5 ao módulo USB), então um simples bit-set/clear em PORTC
+ * não corre risco de read-modify-write: os demais bits são entradas
+ * ou estão sob controle de periférico, e o latch deles é ignorado.
+ * ------------------------------------------------------------------ */
+#define BTN_TELA_MASCARA    0x01u               /* RA0                */
+#define BTN_ALARME_MASCARA  0x02u               /* RA1                */
+
+#define BTN_TELA_LER()      (PORTAbits.RA0)     /* 0 = pressionado    */
+#define BTN_ALARME_LER()    (PORTAbits.RA1)     /* 0 = pressionado    */
+
+#define BUZZER_MASCARA      0x04u               /* RC2                */
+#define BUZZER_LIGAR()      do { PORTCbits.RC2 = 1; } while (0)
+#define BUZZER_DESLIGAR()   do { PORTCbits.RC2 = 0; } while (0)
 
 /* Inicialização dos pinos — implementada em main.c (chamada única).  */
 void board_iniciar_pinos(void);

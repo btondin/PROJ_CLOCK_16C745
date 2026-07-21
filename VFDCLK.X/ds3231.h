@@ -42,4 +42,35 @@ bool ds3231_gravar(const ds3231_hora_t *hora);
  * exibida seria lixo até uma sincronização via USB.                  */
 bool ds3231_hora_valida(void);
 
+/* ------------------------------------------------------------------
+ * ALARME DIÁRIO (usa o "Alarme 1" do DS3231)
+ * ------------------------------------------------------------------
+ * Por que o alarme mora no RTC e não no PIC: o PIC16C745 é OTP e NÃO
+ * tem EEPROM de dados ("EEPROM space: None available"), ou seja, não
+ * há onde guardar configuração que sobreviva ao desligamento. Já os
+ * registradores de alarme do DS3231 (07h..0Ah) e o bit de habilitação
+ * A1IE (controle 0Eh) são mantidos pela bateria — então o alarme
+ * persiste sozinho, sem nenhum código de armazenamento.
+ * ------------------------------------------------------------------ */
+
+/* Programa o alarme para disparar TODO DIA em horas:minutos (BCD).
+ * Não altera a habilitação — use ds3231_alarme_habilitar().          */
+bool ds3231_alarme_gravar(uint8_t horas_bcd, uint8_t minutos_bcd);
+
+/* Lê o horário programado e se o alarme está habilitado.             */
+bool ds3231_alarme_ler(uint8_t *horas_bcd, uint8_t *minutos_bcd,
+                       bool *habilitado);
+
+/* Liga/desliga o alarme (bit A1IE do registrador de controle).       */
+bool ds3231_alarme_habilitar(bool ligar);
+
+/* True se o alarme disparou (flag A1F do status). O flag é LATCHED:
+ * fica em 1 até ser reconhecido, então é impossível perder um disparo
+ * por polling — não é preciso fiar o pino INT/SQW.                   */
+bool ds3231_alarme_disparou(void);
+
+/* Reconhece o disparo limpando A1F (o alarme rearma sozinho para o
+ * dia seguinte).                                                     */
+bool ds3231_alarme_reconhecer(void);
+
 #endif /* DS3231_H */
