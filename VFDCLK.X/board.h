@@ -27,10 +27,13 @@
  *                     ATENÇÃO: através de um MAX232 (T1IN -> T1OUT), que
  *                     converte TTL<->EIA-232 e inverte a polaridade
  *                     (o VFD repousa em mark = tensão negativa).
- *    21   RB0         SDA do DS3231 (open-drain via TRIS, pull-up 4k7)
- *    22   RB1         SCL do DS3231 (push-pull via sombra de PORTB)
+ *    21   RB0/INT     INT/SQW do DS3231 (dreno aberto, pull-up externo;
+ *                     entrada de interrupção externa INT0 — USO FUTURO)
+ *    22   RB1         livre
  *    23   RB2         DATA do SHT15 (open-drain via TRIS, pull-up 10k)
  *    24   RB3         SCK  do SHT15 (push-pull via sombra de PORTB)
+ *    25   RB4         SCL do DS3231 (push-pull via sombra de PORTB)
+ *    26   RB5         SDA do DS3231 (open-drain via TRIS, pull-up 4k7)
  *    2    RA0         BOTÃO 1 (navegar menu)  — p/ GND, pull-up 10k
  *    3    RA1         BOTÃO 2 (alterar)       — p/ GND, pull-up 10k
  *    4    RA2         LED de heartbeat (liveness) — série c/ ~330R p/ GND
@@ -74,18 +77,23 @@ extern volatile uint8_t portb_sombra;
 #define PORTB_APLICAR()     do { PORTB = portb_sombra; } while (0)
 
 /* ------------------------------------------------------------------
- * I2C por software (DS3231)  —  RB0 = SDA, RB1 = SCL
+ * I2C por software (DS3231)  —  RB4 = SCL, RB5 = SDA
  * ------------------------------------------------------------------
  * SDA: open-drain emulado (latch 0 fixo; TRIS comanda a linha)
  * SCL: push-pull pela sombra (o DS3231 não usa clock-stretching em
  *      leituras simples, e somos o único mestre do barramento)
+ *
+ * NOTA: SDA/SCL ficam em RB5/RB4, que também são pinos de
+ * "interrupt-on-change" (RB7:RB4). Isso é inofensivo porque NÃO usamos
+ * RBIE/RBIF — a interrupção do DS3231 (uso futuro) é a INT0 em RB0/INT,
+ * um caminho independente. Mantenha RBIE = 0.
  * ------------------------------------------------------------------ */
-#define I2C_SDA_MASCARA     0x01u               /* RB0                */
-#define I2C_SCL_MASCARA     0x02u               /* RB1                */
+#define I2C_SDA_MASCARA     0x20u               /* RB5                */
+#define I2C_SCL_MASCARA     0x10u               /* RB4                */
 
 #define I2C_SDA_SOLTAR()    do { TRISB |=  I2C_SDA_MASCARA; } while (0)
 #define I2C_SDA_BAIXO()     do { TRISB &= (uint8_t)~I2C_SDA_MASCARA; } while (0)
-#define I2C_SDA_LER()       (PORTBbits.RB0)
+#define I2C_SDA_LER()       (PORTBbits.RB5)
 
 #define I2C_SCL_ALTO()      do { portb_sombra |=  I2C_SCL_MASCARA; PORTB_APLICAR(); } while (0)
 #define I2C_SCL_BAIXO()     do { portb_sombra &= (uint8_t)~I2C_SCL_MASCARA; PORTB_APLICAR(); } while (0)
@@ -93,6 +101,24 @@ extern volatile uint8_t portb_sombra;
 /* Meio-período do clock I2C. 5 us -> SCL ~100 kHz (DS3231 aceita até
  * 400 kHz; 100 kHz dá margem folgada para os pull-ups de 4k7).       */
 #define I2C_MEIO_PERIODO_US 5
+
+/* ------------------------------------------------------------------
+ * INT/SQW do DS3231 -> RB0/INT (pino 21)  —  USO FUTURO
+ * ------------------------------------------------------------------
+ * Saída de dreno aberto do DS3231 (precisa de pull-up externo, para
+ * uma alimentação de até 5,5 V), ligada à ENTRADA de interrupção
+ * externa INT0 do PIC (RB0). Hoje o firmware NÃO usa este pino: o
+ * alarme é lido por polling do flag A1F (latched). No futuro dá para
+ * migrar para interrupção por borda:
+ *   - INTCN = 1 (padrão no power-on): pino = alarme ativo-baixo;
+ *   - INTCN = 0                     : pino = onda quadrada (RS2:RS1).
+ * Para habilitar: OPTION_REGbits.INTEDG = 0 (borda de descida),
+ * INTCONbits.INTE = 1, e trate INTCONbits.INTF na ISR.
+ * RB0 permanece ENTRADA (TRISB bit0 = 1). NÃO confundir com RBIE/RBIF
+ * (interrupt-on-change de RB7:RB4) — este é o INT0, canal separado.
+ * ------------------------------------------------------------------ */
+#define DS3231_INT_MASCARA  0x01u               /* RB0/INT (pino 21)  */
+#define DS3231_INT_LER()    (PORTBbits.RB0)     /* 0 = alarme ativo   */
 
 /* ------------------------------------------------------------------
  * Barramento Sensirion (SHT15) — RB2 = DATA, RB3 = SCK

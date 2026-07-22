@@ -4,7 +4,7 @@
  * =====================================================================
  *  O PIC16C745 NÃO possui módulo MSSP/I2C em hardware, portanto o
  *  barramento do DS3231 é gerado por software nos pinos definidos em
- *  board.h (RB0 = SDA, RB1 = SCL), a ~100 kHz.
+ *  board.h (RB4 = SCL, RB5 = SDA), a ~100 kHz.
  *
  *  Implementação mínima de mestre único: START, STOP, escrita de byte
  *  com leitura de ACK e leitura de byte com envio de ACK/NACK.

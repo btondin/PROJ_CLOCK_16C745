@@ -118,14 +118,16 @@ void board_iniciar_pinos(void)
     TRISA  = (uint8_t)~LED_HB_MASCARA;   /* RA2 saída; RA0/RA1 entradas   */
 
     /* PORTB:
-     *  RB0 (SDA) e RB2 (DATA SHT): latch 0, iniciam SOLTOS (TRIS=1)
-     *  RB1 (SCL) e RB3 (SCK)     : saídas push-pull, iniciam em nível
+     *  RB5 (SDA) e RB2 (DATA SHT): latch 0, iniciam SOLTOS (TRIS=1)
+     *  RB4 (SCL) e RB3 (SCK)     : saídas push-pull, iniciam em nível
      *                              de repouso (SCL=1 alto, SCK=0 baixo)
-     *  RB4..RB7                  : entradas (livres)                 */
+     *  RB0 (INT/SQW do DS3231)   : ENTRADA (INT0; uso futuro, ver board.h)
+     *  RB1, RB6, RB7             : entradas (RB1 livre; RB6/7 = ICSP)  */
     portb_sombra = I2C_SCL_MASCARA;      /* SCL=1, SCK=0, SDA=DATA=0 */
     PORTB_APLICAR();
     TRISB = (uint8_t)~(I2C_SCL_MASCARA | SHT_SCK_MASCARA);
-    /* = 0b11110101: SCL e SCK saídas; SDA e DATA soltos (entradas)  */
+    /* = 0b11100111: SCL(RB4) e SCK(RB3) saídas; demais entradas —
+     *   SDA/DATA soltos (open-drain), RB0=INT/SQW, RB1 livre, RB6/7 ICSP */
 
     /* PORTC: RC6 = TX (o USART assume o controle do pino quando
      * TXEN=1/SPEN=1); RC4/RC5 são do USB; RC2 = buzzer é a única saída.

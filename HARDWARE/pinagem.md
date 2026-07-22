@@ -1,4 +1,4 @@
-# Hardware — Relógio VFD (PIC16C745)
+11não# Hardware — Relógio VFD (PIC16C745)
 
 Documento de ligação elétrica do projeto. A pinagem do MCU foi conferida
 contra o arquivo de definição oficial do dispositivo (Microchip DFP
@@ -15,12 +15,12 @@ contra o arquivo de definição oficial do dispositivo (Microchip DFP
                     ┌───────────────┐
         MCLR/VPP  1 ┤●              ├ 28  RB7/ICSPDAT
          RA0/AN0  2 ┤ ── BOTÃO 1    ├ 27  RB6/ICSPCLK
-         RA1/AN1  3 ┤ ── BOTÃO 2    ├ 26  RB5
-         RA2/AN2  4 ┤ ── LED (HB)   ├ 25  RB4
+         RA1/AN1  3 ┤ ── BOTÃO 2    ├ 26  RB5   ── SDA  (DS3231)
+         RA2/AN2  4 ┤ ── LED (HB)   ├ 25  RB4   ── SCL  (DS3231)
     RA3/AN3/VREF  5 ┤               ├ 24  RB3   ── SCK  (SHT15)
      RA4/T0CKI    6 ┤               ├ 23  RB2   ── DATA (SHT15)
-        RA5/AN4   7 ┤   PIC16C745   ├ 22  RB1   ── SCL  (DS3231)
-            VSS   8 ┤   (GND)       ├ 21  RB0   ── SDA  (DS3231)
+        RA5/AN4   7 ┤   PIC16C745   ├ 22  RB1   (livre)
+            VSS   8 ┤   (GND)       ├ 21  RB0   ── INT/SQW (DS3231)
       OSC1/CLKIN  9 ┤   ── xtal     ├ 20  VDD   (+5 V)
      OSC2/CLKOUT 10 ┤   ── xtal     ├ 19  VSS   (GND)
    RC0/T1OSO     11 ┤ (TMR1, livre) ├ 18  RC7/RX/DT
@@ -47,13 +47,15 @@ contra o arquivo de definição oficial do dispositivo (Microchip DFP
 |  17  | RC6/TX       | Entrada serial do VFD (J1-14) **via MAX232** (T1IN, pino 11)  |
 |  19  | VSS          | GND                                                   |
 |  20  | VDD          | +5 V                                                  |
-|  21  | RB0/SDA      | SDA do DS3231 (pull-up 4,7 kΩ para +5 V)              |
-|  22  | RB1/SCL      | SCL do DS3231 (pull-up 4,7 kΩ para +5 V)              |
+|  21  | RB0/INT      | **INT/SQW do DS3231** (dreno aberto, pull-up 4,7 kΩ; entrada INT0 — **uso futuro**) |
+|  22  | RB1          | Livre                                                 |
 |  23  | RB2/DATA     | DATA do SHT15 (pull-up 10 kΩ para +5 V)              |
 |  24  | RB3/SCK      | SCK do SHT15                                           |
+|  25  | RB4/SCL      | SCL do DS3231 (pull-up 4,7 kΩ para +5 V)              |
+|  26  | RB5/SDA      | SDA do DS3231 (pull-up 4,7 kΩ para +5 V)              |
 | 27/28| RB6/RB7      | ICSPCLK/ICSPDAT (gravação in-circuit)                 |
 
-Os pinos RB4, RB5 e o restante ficam livres.
+O pino RB1 fica livre (RB6/RB7 são reservados ao ICSP de gravação).
 
 ---
 
@@ -163,18 +165,29 @@ pull-up de 400 kΩ é fraco e um fio solto em protoboard capta ruído.
 
 ## 5. Barramentos dos periféricos
 
-### DS3231 (I²C por software) — RB0/RB1
+### DS3231 (I²C por software) — RB4/RB5 + INT/SQW em RB0
 
 ```
-   +5 V ──4,7kΩ──┬─────────────── SDA (RB0, pino 21)
-   +5 V ──4,7kΩ──┼──┬──────────── SCL (RB1, pino 22)
-                 │  │
-              ┌──┴──┴──┐
-              │ DS3231 │  VBAT ── bateria CR2032 (+)
-              └────────┘  GND  ── GND
+   +5 V ──4,7kΩ──┬───────────────────── SCL     (RB4, pino 25)
+   +5 V ──4,7kΩ──┼──┬────────────────── SDA     (RB5, pino 26)
+   +5 V ──4,7kΩ──┼──┼──┬─────────────── INT/SQW (RB0/INT, pino 21)
+                 │  │  │
+              ┌──┴──┴──┴──┐
+              │  DS3231   │  VBAT ── bateria CR2032 (+)
+              └───────────┘  GND  ── GND
 ```
 Endereço I²C fixo 0x68. A bateria mantém a hora com a alimentação
 principal desligada.
+
+O **INT/SQW** é uma saída de **dreno aberto** (exige o pull-up externo,
+que pode ir a uma alimentação de até **5,5 V**, independente de VCC) e
+liga ao **RB0/INT** — a entrada de interrupção externa **INT0** do PIC.
+Hoje o firmware **não** o utiliza (o alarme é lido por *polling* do flag
+`A1F`, que é *latched*), mas o pino fica reservado para, no futuro,
+disparar por interrupção de borda: com `INTCN=1` (padrão no power-on) a
+saída é o **alarme ativo-baixo**; com `INTCN=0` vira **onda quadrada**
+(frequência por RS2:RS1). Ver [`board.h`](../VFDCLK.X/board.h)
+(`DS3231_INT_MASCARA`).
 
 ### SHT15 (Sensibus — 2 fios proprietário Sensirion) — RB2/RB3
 
@@ -239,10 +252,14 @@ roda-livre** por ser uma carga indutiva (magnética):
   gerar o tom por PWM (exigiria mudar o firmware, que hoje só chaveia o
   pino).
 
-> **Nota sobre o pino INT/SQW do DS3231:** ele **não é usado** e pode
-> ficar desconectado. O flag de alarme `A1F` (status `0Fh`) é *latched* —
-> fica em 1 até ser reconhecido — então o firmware o consulta 1×/segundo
-> sem risco de perder um disparo, economizando um pino e um pull-up.
+> **Nota sobre o pino INT/SQW do DS3231:** ele é ligado ao **RB0/INT**
+> (entrada de interrupção externa INT0), com pull-up externo, e fica
+> **reservado para uso futuro**. O firmware atual **ainda não o utiliza**:
+> o flag de alarme `A1F` (status `0Fh`) é *latched* — fica em 1 até ser
+> reconhecido — então o alarme é lido por *polling* 1×/segundo, sem risco
+> de perder um disparo. Com o INT/SQW já roteado até o RB0/INT, dá para
+> migrar esse polling para interrupção por borda quando quiser (INT0:
+> `INTEDG=0`, `INTE=1`, tratar `INTF` na ISR). Ver [`board.h`](../VFDCLK.X/board.h).
 
 ### LED de heartbeat (liveness) — RA2
 
@@ -280,7 +297,8 @@ então o ritmo do pisca também reflete a saúde/tempo do laço.
 | 1   | Cristal 24 MHz + 2× 15–22 pF         | clock do USB                       |
 | 1   | SP232ACP (Sipex; equiv. MAX232A)     | conversor de nível serial TTL↔EIA-232 |
 | 5   | Capacitor 0,1 µF cerâmico            | charge-pump do SP232ACP            |
-| 2   | Resistor 4,7 kΩ                      | pull-ups I²C                       |
+| 2   | Resistor 4,7 kΩ                      | pull-ups I²C (SDA/SCL)             |
+| 1   | Resistor 4,7 kΩ                      | pull-up do INT/SQW (RB0/INT)       |
 | 1   | Resistor 10 kΩ                       | pull-up DATA do SHT15              |
 | 1   | Resistor 10 kΩ                       | pull-up de MCLR                    |
 | 2   | Botão táctil (push-button)           | troca de tela / alarme             |

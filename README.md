@@ -88,7 +88,7 @@ Resumo dos periféricos (detalhes, valores de componentes e esquemático em
 | Bloco        | Pinos do PIC        | Observação                              |
 |--------------|---------------------|-----------------------------------------|
 | Display VFD  | RC6/TX (17)         | serial 19200 8N1, **via MAX232**        |
-| RTC DS3231   | RB0/SDA, RB1/SCL    | I²C por software, pull-ups 4,7 kΩ        |
+| RTC DS3231   | RB4/SCL, RB5/SDA, RB0/INT | I²C por software (pull-ups 4,7 kΩ); INT/SQW no INT0 (uso futuro) |
 | Sensor SHT15 | RB2/DATA, RB3/SCK   | Sensibus, pull-up 10 kΩ em DATA          |
 | USB          | RC4/D-, RC5/D+, VUSB | low-speed, 1,5 kΩ de VUSB para D-        |
 | Clock        | OSC1/OSC2 (9/10)    | cristal 24 MHz (HS, sem PLL)             |
