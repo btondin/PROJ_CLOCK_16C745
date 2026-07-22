@@ -9,8 +9,8 @@ instalar driver (o aparelho enumera como HID genérico).
 
 > Firmware em C (MPLAB XC8), escrito na forma canônica de projetos para
 > PIC: `board.h` central, um driver por periférico, documentação e
-> referência de datasheet em cada módulo. Compila em **79,7 %** da ROM
-> (6526/8192 words) e **71,1 %** da RAM (182/256 bytes) do PIC16C745.
+> referência de datasheet em cada módulo. Compila em **90,6 %** da ROM
+> (7420/8192 words) e **89,8 %** da RAM (230/256 bytes) do PIC16C745.
 
 ---
 
@@ -22,21 +22,28 @@ instalar driver (o aparelho enumera como HID genérico).
   verificação de **CRC-8** e conversão em **ponto fixo** (sem `float`,
   validada contra as fórmulas oficiais da Sensirion).
 - 🖥️ **Display VFD 20×2** em modo serial (19200 8N1), com telas que
-  alternam automaticamente (6 s hora / 4 s clima / 3 s alarme) e
-  controle de brilho.
+  alternam automaticamente (6 s hora / 4 s clima). As duas linhas são
+  escritas num único fluxo de 40 caracteres (auto-wrap), o que mantém a
+  2ª linha estável sem depender do comando de trava de rolagem.
 - 🔌 **Acerto de hora por USB** (classe HID, **sem driver**): o firmware
   recebe a hora do PC e grava no DS3231. Todo o stack USB roda por
   interrupção, então o relógio nunca "trava" durante a comunicação.
-- ⏱️ **Alarme diário**, configurável pelo PC (`--alarme 07:30`) ou pelos
-  botões. Fica guardado nos registradores do **DS3231 alimentados pela
-  bateria** — a única memória não-volátil do projeto, já que o PIC16C745
-  é OTP e **não tem EEPROM**. Aviso sonoro (buzzer) + mensagem piscando
-  no display, com auto-silenciamento após 2 minutos.
-- 🔘 **Dois botões**: um avança as telas; o outro silencia o alarme
-  (toque curto) ou liga/desliga (toque longo de ~2 s).
-- 💓 **LED de heartbeat** (RC0): pisca a ~1 Hz enquanto o laço roda —
+- ⏱️ **Alarme diário**, com horário configurável pelo PC
+  (`--alarme 07:30`) e liga/desliga também pelos botões. Fica guardado
+  nos registradores do **DS3231 alimentados pela bateria** — a única
+  memória não-volátil do projeto, já que o PIC16C745 é OTP e **não tem
+  EEPROM**. Aviso sonoro (buzzer) + mensagem piscando no display; ao
+  tocar, **qualquer botão silencia** (e rearma para o dia seguinte).
+- 🔘 **Menu de configuração por dois botões**: o **botão 1** abre o menu
+  e percorre as opções (**alarme**, **brilho da tela**); o **botão 2**
+  altera a opção mostrada (liga/desliga o alarme; sobe o brilho até o
+  máximo e volta ao mínimo). Sem toque por alguns segundos, o menu fecha
+  e o carrossel volta. O alarme saiu do rodízio automático — só aparece
+  no menu ou quando dispara.
+- 💓 **LED de heartbeat** (RA2): pisca a ~1 Hz enquanto o laço roda —
   sinal permanente de que o PIC está vivo, e um diagnóstico grátis (se
-  congelar, algo travou).
+  congelar, algo travou). Fica em RA2 (não em RC0) porque o RC0 é o pino
+  do Timer1, usado como base de tempo do bipe do alarme.
 
 ---
 
@@ -85,9 +92,10 @@ Resumo dos periféricos (detalhes, valores de componentes e esquemático em
 | Sensor SHT15 | RB2/DATA, RB3/SCK   | Sensibus, pull-up 10 kΩ em DATA          |
 | USB          | RC4/D-, RC5/D+, VUSB | low-speed, 1,5 kΩ de VUSB para D-        |
 | Clock        | OSC1/OSC2 (9/10)    | cristal 24 MHz (HS, sem PLL)             |
-| Botões       | RA0, RA1 (2/3)      | troca de tela / alarme, pull-up 10 kΩ    |
+| Botões       | RA0, RA1 (2/3)      | menu: navegar / alterar, pull-up 10 kΩ   |
 | Buzzer       | RC2 (13)            | alarme, via transistor NPN               |
-| LED heartbeat| RC0 (11)            | liveness ~1 Hz, série c/ 330 Ω           |
+| LED heartbeat| RA2 (4)             | liveness ~1 Hz, série c/ 330 Ω           |
+| Base de tempo| TMR1 (usa RC0)      | ritmo do bipe; RC0 fica sem uso externo  |
 
 ⚠️ **Ponto de atenção — serial do display:** o VFD espera a linha em
 repouso no nível **baixo** (mark, padrão EIA-232), enquanto a UART do PIC
@@ -148,8 +156,11 @@ python dtc_sync.py
 
 O utilitário envia a hora local do PC; o firmware grava no DS3231, o
 display mostra **"HORA SINCRONIZADA"** e o script lê de volta hora,
-temperatura e umidade como confirmação. Detalhes em
-[`DTCAPP/README.md`](DTCAPP/README.md).
+temperatura e umidade como confirmação.
+
+No Windows, [`DTCAPP/configurar.bat`](DTCAPP/configurar.bat) dá um menu
+(duplo-clique) para sincronizar a hora e configurar o alarme sem digitar
+comando nenhum. Detalhes em [`DTCAPP/README.md`](DTCAPP/README.md).
 
 ---
 

@@ -54,14 +54,20 @@ void vfd_escrever_char(char c);
 /* Escreve uma string C (terminada em '\0') a partir do cursor atual. */
 void vfd_escrever_texto(const char *texto);
 
-/* Substitui uma linha inteira: escreve o texto e completa com espaços.
- * Use para (re)desenhar uma tela inteira.                            */
-void vfd_linha(uint8_t linha, const char *texto);
+/* Desenha as DUAS linhas de uma vez, como um ÚNICO fluxo de 40
+ * caracteres a partir do canto superior esquerdo, deixando o AUTO-WRAP
+ * do display levar do fim da linha 0 ao início da linha 1. É o método
+ * que o teste manual comprovou (40 caracteres seguidos enchem as duas
+ * linhas) e que NÃO dispara a rolagem vertical — só um 41º caractere
+ * rolaria. Cada ponteiro pode ter menos de VFD_COLUNAS: o driver
+ * completa a linha com espaços. É a forma canônica de (re)desenhar uma
+ * tela inteira neste projeto.                                        */
+void vfd_quadro(const char *linha0, const char *linha1);
 
-/* Escreve um trecho curto em (linha, coluna) SEM mexer no resto da
- * linha. Use para atualizar só o campo que muda (ex.: os dígitos do
- * relógio), evitando a piscada de repintar a tela toda.              */
-void vfd_escrever_em(uint8_t linha, uint8_t coluna, const char *texto);
+/* Igual a vfd_quadro(), mas a LINHA 0 pisca (atributo 31h/32h do
+ * display, sem custo de tráfego serial). Usada na tela do alarme
+ * disparado.                                                         */
+void vfd_quadro_piscante(const char *linha0, const char *linha1, uint8_t taxa);
 
 /* Atualiza um campo de DOIS DÍGITOS BCD (ex.: "07") escrevendo apenas
  * o(s) dígito(s) que mudaram entre 'antigo' e 'novo'. Se nada mudou,

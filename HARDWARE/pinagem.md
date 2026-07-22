@@ -16,14 +16,14 @@ contra o arquivo de definição oficial do dispositivo (Microchip DFP
         MCLR/VPP  1 ┤●              ├ 28  RB7/ICSPDAT
          RA0/AN0  2 ┤ ── BOTÃO 1    ├ 27  RB6/ICSPCLK
          RA1/AN1  3 ┤ ── BOTÃO 2    ├ 26  RB5
-         RA2/AN2  4 ┤               ├ 25  RB4
+         RA2/AN2  4 ┤ ── LED (HB)   ├ 25  RB4
     RA3/AN3/VREF  5 ┤               ├ 24  RB3   ── SCK  (SHT15)
      RA4/T0CKI    6 ┤               ├ 23  RB2   ── DATA (SHT15)
         RA5/AN4   7 ┤   PIC16C745   ├ 22  RB1   ── SCL  (DS3231)
             VSS   8 ┤   (GND)       ├ 21  RB0   ── SDA  (DS3231)
       OSC1/CLKIN  9 ┤   ── xtal     ├ 20  VDD   (+5 V)
      OSC2/CLKOUT 10 ┤   ── xtal     ├ 19  VSS   (GND)
-   RC0/T1OSO     11 ┤ ── LED (HB)   ├ 18  RC7/RX/DT
+   RC0/T1OSO     11 ┤ (TMR1, livre) ├ 18  RC7/RX/DT
    RC1/T1OSI     12 ┤               ├ 17  RC6/TX ── serial p/ VFD (via MAX232)
       RC2/CCP1   13 ┤ ── BUZZER     ├ 16  RC5/D+ ── USB D+
            VUSB  14 ┤               ├ 15  RC4/D- ── USB D-
@@ -33,9 +33,10 @@ contra o arquivo de definição oficial do dispositivo (Microchip DFP
 | Pino | Sinal        | Ligação no projeto                                    |
 |-----:|--------------|-------------------------------------------------------|
 |   1  | MCLR/VPP     | Pull-up 10 kΩ para +5 V (+ conector ICSP p/ gravar)   |
-|   2  | RA0          | **Botão 1** (troca de tela) — p/ GND, pull-up 10 kΩ   |
-|   3  | RA1          | **Botão 2** (alarme) — p/ GND, pull-up 10 kΩ          |
-|  11  | RC0          | **LED de heartbeat** — em série c/ ~330 Ω para GND    |
+|   2  | RA0          | **Botão 1** (navegar no menu) — p/ GND, pull-up 10 kΩ |
+|   3  | RA1          | **Botão 2** (alterar opção) — p/ GND, pull-up 10 kΩ   |
+|   4  | RA2          | **LED de heartbeat** — em série c/ ~330 Ω para GND    |
+|  11  | RC0          | **Sem ligação externa** — é T1OSO/T1CKI, usado pelo TMR1 internamente (base de tempo do bipe do alarme); não usar como I/O |
 |  13  | RC2          | **Buzzer** via transistor NPN (nível 1 = tocando)     |
 |   8  | VSS          | GND                                                   |
 |   9  | OSC1         | Cristal 24 MHz + 15–22 pF para GND                     |
@@ -203,8 +204,12 @@ escritas evita qualquer interferência de *read-modify-write*.
 
 | Botão | Ação |
 |---|---|
-| **1** (RA0) | avança a tela: hora → clima → alarme → hora |
-| **2** (RA1) | toque **curto**: silencia o alarme tocando<br>toque **longo** (~2 s): liga/desliga o alarme |
+| **1** (RA0) | **NAVEGAR**: abre o menu de configuração e percorre as opções (ALARME, BRILHO) |
+| **2** (RA1) | **ALTERAR**: muda o valor da opção mostrada (liga/desliga o alarme; sobe o brilho até o máximo e volta ao mínimo) |
+
+Com o alarme **tocando**, qualquer toque em qualquer botão silencia (e rearma
+para o dia seguinte) — a distinção curto/longo continua disponível no driver
+(`botoes.c`) para uso futuro, mas hoje qualquer toque conta como um "clique".
 
 Buzzer: **TMB-05** — buzzer **magnético ativo** de 5 V (tem oscilador
 interno, então emite som só com nível DC; o firmware apenas liga/desliga
@@ -239,7 +244,7 @@ roda-livre** por ser uma carga indutiva (magnética):
 > fica em 1 até ser reconhecido — então o firmware o consulta 1×/segundo
 > sem risco de perder um disparo, economizando um pino e um pull-up.
 
-### LED de heartbeat (liveness) — RC0
+### LED de heartbeat (liveness) — RA2
 
 Item **fixo** do projeto: um LED que pisca a ~1 Hz sempre que o firmware
 está executando o laço principal. Serve como sinal permanente de que o
@@ -248,12 +253,19 @@ preso). Também facilita o diagnóstico na bancada: display apagado **com**
 o LED piscando aponta problema no caminho do display, não no processador.
 
 ```
-   RC0 (11) ──►|──[ ~330 Ω ]── GND     (acende em nível alto)
-              LED
+   RA2 (4) ──►|──[ ~330 Ω ]── GND     (acende em nível alto)
+             LED
 ```
 
 O firmware pisca o LED na cadência do laço (contador ÷10 sobre os 50 ms),
 então o ritmo do pisca também reflete a saúde/tempo do laço.
+
+> **Por que RA2 e não RC0:** o RC0 é também o pino T1OSO/T1CKI do Timer1,
+> usado internamente como base de tempo do bipe do alarme (ver firmware).
+> Em bancada, ligar o TMR1 fez o LED parar de acender quando estava em
+> RC0, mesmo com o oscilador do timer desligado (clock interno) — por
+> isso o LED foi para RA2, um pino puramente digital sem função de
+> periférico associada.
 
 ---
 
@@ -277,7 +289,7 @@ então o ritmo do pisca também reflete a saúde/tempo do laço.
 | 1   | Transistor NPN (BC547/2N3904)        | aciona o buzzer                    |
 | 1   | Resistor 1 kΩ                        | base do transistor do buzzer       |
 | 1   | Diodo 1N4148/1N4007                  | roda-livre do buzzer               |
-| 1   | LED (qualquer cor)                   | heartbeat / liveness (RC0)         |
+| 1   | LED (qualquer cor)                   | heartbeat / liveness (RA2)         |
 | 1   | Resistor 330 Ω                       | limitador do LED de heartbeat      |
 | 1   | Resistor 1,5 kΩ                      | identificação USB low-speed        |
 | 1   | Capacitor 0,22 µF                    | VUSB                               |

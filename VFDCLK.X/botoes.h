@@ -5,10 +5,13 @@
  *  Dois botões ligados entre o pino e o GND, com pull-up externo de
  *  10 kΩ (portanto nível 0 = pressionado):
  *
- *    RA0 (pino 2) — BOTÃO 1: avança a tela do display
- *    RA1 (pino 3) — BOTÃO 2: alarme
- *                     toque CURTO  -> silencia o alarme que está tocando
- *                     toque LONGO  -> habilita/desabilita o alarme
+ *    RA0 (pino 2) — BOTÃO 1: NAVEGAR — abre o menu de configuração e
+ *                            percorre as opções (alarme, brilho)
+ *    RA1 (pino 3) — BOTÃO 2: ALTERAR o valor da opção mostrada
+ *                            (com o alarme TOCANDO, qualquer botão cala)
+ *
+ *  O menu usa qualquer toque (curto ou longo) como um "clique"; a
+ *  distinção curto/longo continua disponível na API para uso futuro.
  *
  *  Os botões ficam no PORTA de propósito: o PORTB é reservado aos dois
  *  barramentos bit-bang (I2C e Sensibus), e mantê-lo livre de outras

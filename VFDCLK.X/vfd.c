@@ -34,16 +34,11 @@
 
 /* Códigos de controle do IEE 036X2 (A0/RS baixo, seção 4.1)          */
 #define VFD_CMD_CURSOR_OFF      0x0Eu
-#define VFD_CMD_TRAVA_ROLAGEM   0x10u   /* Scroll Line Lock + ID (2 by) */
 #define VFD_CMD_RESET_SW        0x14u
 #define VFD_CMD_LIMPAR_HOME     0x15u
 #define VFD_CMD_HOME            0x16u   /* cursor ao início, sem limpar */
 #define VFD_CMD_POSICIONAR      0x1Bu
 #define VFD_CMD_PREFIXO_A0      0x19u   /* A0=1 só para o próximo byte */
-
-/* ID do "Scroll Line Lock" (10h): 01h trava as linhas 0 E 1 — as duas
- * do display 20x2 — contra a rolagem vertical (spec 4.6).            */
-#define VFD_TRAVA_LINHAS_0E1    0x01u
 
 /* Códigos de controle com A0 alto (seção 4.5, exigem prefixo 19h)    */
 #define VFD_CMD_BRILHO          0x30u
@@ -97,15 +92,15 @@ void vfd_iniciar(void)
     UART_TX(VFD_CMD_CURSOR_OFF);
     __delay_ms(10);
 
-    /* TRAVA A ROLAGEM VERTICAL (10h + 01h). Este é o comando CRÍTICO
-     * para um relógio: o modo padrão do display é ROLAR para cima
-     * quando a última linha enche (spec 4.3), o que fazia o conteúdo
-     * escrito na 2ª linha "subir" para a 1ª — e a 2ª nunca era usada.
-     * Travando as duas linhas, cada uma fica no lugar e o
-     * posicionamento explícito (1Bh) controla tudo.                   */
-    UART_TX(VFD_CMD_TRAVA_ROLAGEM);
-    UART_TX(VFD_TRAVA_LINHAS_0E1);
-    __delay_ms(10);
+    /* Nota sobre a ROLAGEM VERTICAL: o modo padrão do display é rolar
+     * para cima quando a última linha enche (spec 4.3). Tentamos travar
+     * isso pelo comando 10h ("Scroll Line Lock"), mas ele NÃO teve
+     * efeito confiável neste exemplar (o conteúdo continuava subindo, e
+     * a 2ª linha nunca era usada). A solução adotada é outra e não
+     * depende desse comando: o desenho de tela (vfd_quadro) escreve as
+     * DUAS linhas como um único fluxo de 40 caracteres a partir do topo,
+     * deixando o auto-wrap encher a 2ª linha; como nunca se envia um 41º
+     * caractere, a rolagem jamais é disparada. Ver vfd_quadro().       */
 }
 
 void vfd_limpar(void)
@@ -126,10 +121,6 @@ void vfd_reafirmar(void)
     UART_TX(VFD_CMD_CURSOR_OFF);
     __delay_ms(VFD_ATRASO_POS_MS);
     UART_TX(VFD_CMD_HOME);
-    __delay_ms(VFD_ATRASO_POS_MS);
-    /* Reafirma também a trava de rolagem, caso ruído a tenha desfeito */
-    UART_TX(VFD_CMD_TRAVA_ROLAGEM);
-    UART_TX(VFD_TRAVA_LINHAS_0E1);
     __delay_ms(VFD_ATRASO_POS_MS);
 }
 
@@ -157,49 +148,85 @@ void vfd_escrever_texto(const char *texto)
     }
 }
 
-void vfd_linha(uint8_t linha, const char *texto)
+/* ------------------------------------------------------------------
+ * vfd_quadro — desenha as DUAS linhas como um único fluxo de 40 chars
+ * ------------------------------------------------------------------
+ * Este é o coração do driver e a correção definitiva do bug em que
+ * "tudo caía na 1ª linha e a 2ª nunca era usada". Em vez de posicionar
+ * cada linha (um 1Bh no MEIO do fluxo, que embaralhava a rolagem),
+ * reposiciona UMA única vez no canto superior esquerdo (1Bh 00h — o
+ * mesmo comando que o teste manual confirmou levar 'A' ao topo-esquerda)
+ * e despeja 40 caracteres seguidos. O auto-wrap do display quebra
+ * sozinho no 21º caractere, enchendo a 2ª linha; o 40º ocupa a última
+ * célula SEM rolar, porque só um 41º caractere dispararia a rolagem
+ * vertical. É, byte a byte, a mesma sequência que funcionou no terminal.
+ *
+ * Loops INLINE de propósito (função-folha: só a macro UART_TX): não
+ * gasta nível da pilha de hardware de 8 posições, que o laço divide com
+ * a ISR de USB. Cada ponteiro pode ter MENOS de VFD_COLUNAS caracteres —
+ * o restante é completado com espaços (apaga a escrita anterior sem
+ * "clear", logo sem piscar).
+ * ------------------------------------------------------------------ */
+void vfd_quadro(const char *linha0, const char *linha1)
 {
-    uint8_t coluna = 0;
+    uint8_t i;
     uint8_t c;
 
-    /* Posicionamento inline (função-folha: não chama nada)           */
-    VFD_IR_PARA(linha * VFD_COLUNAS);
+    VFD_IR_PARA(0);                        /* canto superior esquerdo  */
 
-    while ((*texto != '\0') && (coluna < VFD_COLUNAS)) {
-        c = (uint8_t)*texto;
-        if (c < 0x20u) {            /* nunca vazar código de controle */
+    for (i = 0; i < VFD_COLUNAS; i++) {    /* linha 0 (20 caracteres)  */
+        if (*linha0 != '\0') {
+            c = (uint8_t)*linha0++;
+            if (c < 0x20u) { c = ' '; }    /* nunca vazar controle     */
+        } else {
+            c = ' ';                        /* completa com espaços     */
+        }
+        UART_TX(c);
+    }
+    for (i = 0; i < VFD_COLUNAS; i++) {    /* linha 1 (por auto-wrap)  */
+        if (*linha1 != '\0') {
+            c = (uint8_t)*linha1++;
+            if (c < 0x20u) { c = ' '; }
+        } else {
             c = ' ';
         }
         UART_TX(c);
-        texto++;
-        coluna++;
-    }
-    /* Completa com espaços: apaga restos da escrita anterior sem
-     * precisar de "clear" (que faria a tela piscar).                 */
-    while (coluna < VFD_COLUNAS) {
-        UART_TX(' ');
-        coluna++;
     }
 }
 
-void vfd_escrever_em(uint8_t linha, uint8_t coluna, const char *texto)
+void vfd_quadro_piscante(const char *linha0, const char *linha1, uint8_t taxa)
 {
+    uint8_t i;
     uint8_t c;
 
-    /* Escreve só o trecho pedido, SEM completar a linha com espaços:
-     * usado para atualizar campos que mudam (ex.: os dígitos da hora)
-     * sem repintar tudo — repintar as 2 linhas inteiras a cada segundo
-     * são ~44 bytes = ~46 ms de escrita contínua, e isso aparece como
-     * uma piscada na tela.                                           */
-    VFD_IR_PARA(linha * VFD_COLUNAS + coluna);
+    VFD_IR_PARA(0);
 
-    while (*texto != '\0') {
-        c = (uint8_t)*texto;
-        if (c < 0x20u) {
+    /* Liga o atributo piscante ANTES da linha 0 e desliga DEPOIS: só a
+     * linha de cima pisca (31h/32h delimitam a faixa de caracteres). O
+     * respiro pós-comando evita que o display perca o 1º caractere.    */
+    UART_TX(VFD_CMD_PREFIXO_A0);
+    UART_TX(VFD_CMD_BLINK_INICIO);
+    UART_TX(taxa);
+    __delay_ms(VFD_ATRASO_POS_MS);
+    for (i = 0; i < VFD_COLUNAS; i++) {
+        if (*linha0 != '\0') {
+            c = (uint8_t)*linha0++;
+            if (c < 0x20u) { c = ' '; }
+        } else {
             c = ' ';
         }
         UART_TX(c);
-        texto++;
+    }
+    UART_TX(VFD_CMD_PREFIXO_A0);
+    UART_TX(VFD_CMD_BLINK_FIM);
+    for (i = 0; i < VFD_COLUNAS; i++) {
+        if (*linha1 != '\0') {
+            c = (uint8_t)*linha1++;
+            if (c < 0x20u) { c = ' '; }
+        } else {
+            c = ' ';
+        }
+        UART_TX(c);
     }
 }
 
@@ -254,9 +281,26 @@ void vfd_brilho(uint8_t nivel)
         nivel = VFD_BRILHO_MINIMO;
     }
     /* Em serial, o código 30h (A0 alto) é alcançado com o prefixo
-     * 19h (seção 4.6). Os parâmetros seguem como bytes normais.      */
-    UART_TX(VFD_CMD_PREFIXO_A0);
-    UART_TX(VFD_CMD_BRILHO);
-    UART_TX(VFD_BRILHO_TODAS_COLS);       /* FFh = tela inteira       */
-    UART_TX(nivel);                       /* 0 = máximo .. 7 = mínimo */
+     * 19h (seção 4.6). O comando é MULTIBYTE: 30h + coluna + nível.
+     *
+     * ATENÇÃO (era o bug do "menu de brilho trava tudo"): o datasheet
+     * (seção 4.1, CAUTION) diz que ERRO em comando multibyte faz o
+     * firmware do display "pular" para fora do modo de controle. Como o
+     * display fica ocupado logo após o código de comando (mesma coisa
+     * que já derrubava bytes depois do 1Bh de posição), sem um respiro
+     * ele perdia o parâmetro seguinte; a cada toque no botão a corrupção
+     * se acumulava até travar o display. Os __delay_ms abaixo dão tempo
+     * ao display digerir o comando e o parâmetro (o PIC não trava — só
+     * o parser do display se perdia).
+     *
+     * Sobre "não mudava o brilho": sem potenciômetro externo no pino
+     * DIMMING (só o pull-up interno de 10k), o limite de HARDWARE fica
+     * no brilho máximo, então o software cobre todos os 8 níveis
+     * 00h(máx)..07h(mín).                                             */
+    UART_TX(VFD_CMD_PREFIXO_A0);          /* 19h                        */
+    UART_TX(VFD_CMD_BRILHO);              /* 30h (código de comando)    */
+    __delay_ms(VFD_ATRASO_POS_MS);        /* respiro: display digere    */
+    UART_TX(VFD_BRILHO_TODAS_COLS);       /* FFh = todas as colunas     */
+    UART_TX(nivel);                       /* 0 = máximo .. 7 = mínimo   */
+    __delay_ms(VFD_ATRASO_POS_MS);        /* respiro antes do próximo cmd */
 }

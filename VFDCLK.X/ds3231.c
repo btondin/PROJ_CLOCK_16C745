@@ -27,8 +27,18 @@
 
 #define DS3231_REG_SEGUNDOS 0x00u
 #define DS3231_REG_ALARME1  0x07u    /* 07h..0Ah: seg/min/hora/dia    */
+#define DS3231_REG_ALARME2  0x0Bu    /* 0Bh..0Dh: min/hora/dia (LIVRE)*/
 #define DS3231_REG_CONTROLE 0x0Eu
 #define DS3231_REG_STATUS   0x0Fu
+
+/* Área de configuração reaproveitada dos registradores do Alarme 2:
+ *   0Bh = nível de brilho (0..7)
+ *   0Ch = byte de validade (0xA5 = área já gravada por este firmware)
+ * O Alarme 2 nunca é habilitado (A2IE=0), então esses bytes não
+ * disparam nada — ver comentário em ds3231.h.                        */
+#define DS3231_REG_CFG_BRILHO   0x0Bu
+#define DS3231_REG_CFG_VALIDADE 0x0Cu
+#define DS3231_CFG_MAGICO       0xA5u
 
 #define DS3231_STATUS_OSF   0x80u    /* Oscillator Stop Flag (bit 7)  */
 #define DS3231_STATUS_A1F   0x01u    /* Alarme 1 disparou (bit 0)     */
@@ -318,4 +328,59 @@ bool ds3231_alarme_reconhecer(void)
     i2c_stop();
 
     return ok;
+}
+
+/* ==================================================================
+ *  ARMAZENAMENTO DE CONFIGURAÇÃO (registradores livres do Alarme 2)
+ * ================================================================== */
+
+bool ds3231_config_gravar(uint8_t brilho)
+{
+    bool ok;
+
+    if (brilho > 7u) {
+        brilho = 7u;                 /* mantém dentro da faixa válida  */
+    }
+
+    /* Escreve 0Bh (brilho) e 0Ch (validade) em rajada. NÃO toca no
+     * controle (0Eh), então A2IE continua 0 e o Alarme 2 nunca dispara. */
+    i2c_start();
+    ok  = i2c_escrever(DS3231_END_ESCRITA);
+    ok &= i2c_escrever(DS3231_REG_CFG_BRILHO);
+    ok &= i2c_escrever(brilho);              /* 0Bh                     */
+    ok &= i2c_escrever(DS3231_CFG_MAGICO);   /* 0Ch                     */
+    i2c_stop();
+
+    return ok;
+}
+
+bool ds3231_config_ler(uint8_t *brilho)
+{
+    bool ok;
+    uint8_t valor;
+    uint8_t validade;
+
+    i2c_start();
+    ok  = i2c_escrever(DS3231_END_ESCRITA);
+    ok &= i2c_escrever(DS3231_REG_CFG_BRILHO);
+    i2c_start();
+    ok &= i2c_escrever(DS3231_END_LEITURA);
+
+    if (!ok) {
+        i2c_stop();
+        return false;
+    }
+
+    valor    = i2c_ler(I2C_ACK);     /* 0Bh brilho                     */
+    validade = i2c_ler(I2C_NACK);    /* 0Ch marca de validade          */
+    i2c_stop();
+
+    /* Só confia no valor se a área já foi gravada por este firmware
+     * (marca presente) e o brilho é plausível. Numa pilha/RTC novo,
+     * esses bytes têm lixo -> retorna false para usar o padrão.        */
+    if ((validade != DS3231_CFG_MAGICO) || (valor > 7u)) {
+        return false;
+    }
+    *brilho = valor;
+    return true;
 }

@@ -73,4 +73,25 @@ bool ds3231_alarme_disparou(void);
  * dia seguinte).                                                     */
 bool ds3231_alarme_reconhecer(void);
 
+/* ------------------------------------------------------------------
+ * ARMAZENAMENTO DE CONFIGURAÇÃO (usa os registradores do ALARME 2)
+ * ------------------------------------------------------------------
+ * O PIC16C745 não tem EEPROM e o DS3231 não tem SRAM de uso geral, mas
+ * os registradores do Alarme 2 (0Bh..0Dh) estão livres neste projeto
+ * (só o Alarme 1 é usado) e são mantidos pela bateria. Como o Alarme 2
+ * nunca é habilitado (A2IE=0), esses bytes nunca disparam nada — servem
+ * de "EEPROM" grátis para guardar preferências (ex.: nível de brilho).
+ * A habilitação do alarme já persiste sozinha pelo bit A1IE, então não
+ * precisa ser guardada aqui.
+ * ------------------------------------------------------------------ */
+
+/* Grava o nível de brilho (0..7) na área de configuração, com um byte
+ * de validade, para sobreviver ao desligamento.                      */
+bool ds3231_config_gravar(uint8_t brilho);
+
+/* Lê o brilho guardado. Retorna true e preenche *brilho apenas se a
+ * área tiver sido gravada antes (byte de validade presente e valor
+ * plausível); caso contrário retorna false (usar o padrão).          */
+bool ds3231_config_ler(uint8_t *brilho);
+
 #endif /* DS3231_H */
