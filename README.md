@@ -151,12 +151,27 @@ Com o relógio conectado ao PC (ele aparece como HID, sem driver):
 ```bash
 cd DTCAPP
 pip install -r requirements.txt
-python dtc_sync.py
+python dtc_sync.py         # usa a hora deste PC
+python dtc_sync.py --ntp   # usa a hora oficial, buscada na internet
 ```
 
-O utilitário envia a hora local do PC; o firmware grava no DS3231, o
-display mostra **"HORA SINCRONIZADA"** e o script lê de volta hora,
-temperatura e umidade como confirmação.
+O utilitário envia a hora local; o firmware grava no DS3231, o display
+mostra **"HORA SINCRONIZADA"** e o script lê de volta hora, temperatura
+e umidade como confirmação.
+
+Com **`--ntp`** ele consulta antes um servidor de tempo por **SNTP**
+(RFC 4330, UDP 123 — padrão `a.ntp.br`/`b.ntp.br` do NIC.br, com
+`pool.ntp.org` de reserva; trocável por `--ntp-servidor`). O SNTP mede o
+tempo de ida-e-volta do pacote e desconta metade dele, acertando em
+milissegundos — muito além do que um RTC de 1 s de resolução precisa, e
+melhor que uma API HTTP, cuja latência de requisição vai embutida na
+resposta. Não custa dependência nenhuma: só `socket` e `struct` da
+biblioteca padrão. O envio é alinhado com a virada do segundo *já
+corrigido*, então o DS3231 começa o segundo junto com a fonte oficial.
+
+> O NTP entrega tempo absoluto (UTC); o **fuso** continua vindo da
+> configuração do PC. Ou seja: `--ntp` conserta relógio atrasado, não
+> fuso horário errado.
 
 No Windows, [`DTCAPP/configurar.bat`](DTCAPP/configurar.bat) dá um menu
 (duplo-clique) para sincronizar a hora e configurar o alarme sem digitar

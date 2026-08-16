@@ -58,26 +58,41 @@ echo ===================================================
 echo   VFDCLK - Configuracao do relogio via USB
 echo ===================================================
 echo.
-echo   1. Sincronizar hora do PC com o relogio
-echo   2. Ver status (hora, temperatura, umidade, alarme)
-echo   3. Programar horario do alarme (programa e liga)
-echo   4. Ligar alarme (mantem o horario ja gravado)
-echo   5. Desligar alarme
+echo   1. Sincronizar pela INTERNET (hora oficial) - recomendado
+echo   2. Sincronizar pela hora deste PC
+echo   3. Ver status (hora, temperatura, umidade, alarme)
+echo   4. Programar horario do alarme (programa e liga)
+echo   5. Ligar alarme (mantem o horario ja gravado)
+echo   6. Desligar alarme
 echo   0. Sair
 echo.
 set "OPCAO="
 set /p "OPCAO=Escolha uma opcao: "
 
-if "%OPCAO%"=="1" goto SINCRONIZAR
-if "%OPCAO%"=="2" goto STATUS
-if "%OPCAO%"=="3" goto PROGRAMAR
-if "%OPCAO%"=="4" goto LIGAR
-if "%OPCAO%"=="5" goto DESLIGAR
+if "%OPCAO%"=="1" goto SINC_NTP
+if "%OPCAO%"=="2" goto SINCRONIZAR
+if "%OPCAO%"=="3" goto STATUS
+if "%OPCAO%"=="4" goto PROGRAMAR
+if "%OPCAO%"=="5" goto LIGAR
+if "%OPCAO%"=="6" goto DESLIGAR
 if "%OPCAO%"=="0" goto FIM
 echo.
 echo Opcao invalida.
 pause
 goto MENU
+
+rem Opcao 1: busca a hora num servidor de tempo (SNTP). Se a rede falhar,
+rem o dtc_sync.py sai com codigo 6 SEM acertar o relogio - a mensagem
+rem abaixo sugere entao a opcao 2, que nao depende de internet.
+:SINC_NTP
+echo.
+python dtc_sync.py --ntp
+if errorlevel 6 (
+    echo.
+    echo Nao foi possivel obter a hora da internet.
+    echo Use a opcao 2 para sincronizar com a hora deste PC.
+)
+goto FIM_ACAO
 
 :SINCRONIZAR
 echo.
