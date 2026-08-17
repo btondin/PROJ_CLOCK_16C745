@@ -80,18 +80,28 @@ bool ds3231_alarme_reconhecer(void);
  * os registradores do Alarme 2 (0Bh..0Dh) estão livres neste projeto
  * (só o Alarme 1 é usado) e são mantidos pela bateria. Como o Alarme 2
  * nunca é habilitado (A2IE=0), esses bytes nunca disparam nada — servem
- * de "EEPROM" grátis para guardar preferências (ex.: nível de brilho).
- * A habilitação do alarme já persiste sozinha pelo bit A1IE, então não
- * precisa ser guardada aqui.
+ * de "EEPROM" grátis para guardar preferências.
+ *
+ * Mapa da área:
+ *    0Bh  nível de brilho (0..7)
+ *    0Ch  byte de validade (A5h = área já gravada por este firmware)
+ *    0Dh  modo do alarme: 0 = todos os dias, 1 = só dias úteis
+ *
+ * A HABILITAÇÃO do alarme não mora aqui: ela já persiste sozinha no bit
+ * A1IE do registrador de controle. O que se guarda em 0Dh é apenas EM
+ * QUE DIAS ele deve tocar — informação que o DS3231 não sabe filtrar
+ * sozinho (o alarme dele casa um dia específico, não "seg a sex"), e
+ * que por isso é aplicada pelo firmware no momento do disparo.
  * ------------------------------------------------------------------ */
 
-/* Grava o nível de brilho (0..7) na área de configuração, com um byte
- * de validade, para sobreviver ao desligamento.                      */
-bool ds3231_config_gravar(uint8_t brilho);
+/* Grava brilho (0..7) e modo do alarme (0 = todos os dias, 1 = só dias
+ * úteis) na área de configuração, junto com o byte de validade.
+ * Os três registradores vão numa única transação em rajada.           */
+bool ds3231_config_gravar(uint8_t brilho, uint8_t so_dias_uteis);
 
-/* Lê o brilho guardado. Retorna true e preenche *brilho apenas se a
- * área tiver sido gravada antes (byte de validade presente e valor
- * plausível); caso contrário retorna false (usar o padrão).          */
-bool ds3231_config_ler(uint8_t *brilho);
+/* Lê a configuração guardada. Retorna true e preenche os dois destinos
+ * apenas se a área tiver sido gravada antes (byte de validade presente
+ * e brilho plausível); caso contrário retorna false (usar os padrões). */
+bool ds3231_config_ler(uint8_t *brilho, uint8_t *so_dias_uteis);
 
 #endif /* DS3231_H */

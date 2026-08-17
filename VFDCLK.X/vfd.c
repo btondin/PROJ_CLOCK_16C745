@@ -40,6 +40,8 @@
 #define VFD_CMD_POSICIONAR      0x1Bu
 #define VFD_CMD_PREFIXO_A0      0x19u   /* A0=1 só para o próximo byte */
 
+#define VFD_CMD_DEFINIR_UDC     0x18u   /* define caractere (7 bytes)  */
+
 /* Códigos de controle com A0 alto (seção 4.5, exigem prefixo 19h)    */
 #define VFD_CMD_BRILHO          0x30u
 #define VFD_BRILHO_TODAS_COLS   0xFFu
@@ -67,6 +69,78 @@
         UART_TX((uint8_t)(pos));                  \
         __delay_ms(VFD_ATRASO_POS_MS);            \
     } while (0)
+
+/* ------------------------------------------------------------------
+ * CARACTERES DEFINIDOS PELO USUÁRIO (spec 4.3, comando 18h)
+ * ------------------------------------------------------------------
+ * O caractere é uma matriz de 5 colunas x 7 linhas, com as posições
+ * numeradas da esquerda p/ direita, de cima p/ baixo:
+ *
+ *      1  2  3  4  5
+ *      6  7  8  9 10
+ *     11 12 13 14 15
+ *     16 17 18 19 20
+ *     21 22 23 24 25
+ *     26 27 28 29 30
+ *     31 32 33 34 35
+ *
+ * O comando leva 5 bytes de "dot data", mas o mapeamento ponto->bit é
+ * INTERCALADO e, pior, MUDA conforme o modelo do display. A tabela 4-1
+ * do spec traz duas variantes; a usada aqui é a dos modelos
+ * 036X2-100/-105/-122/-124/-130/-134 — confirmada neste aparelho pelo
+ * self-test, que devolveu "S/W NUMBER 35062-01" (o spec, seção 4.4,
+ * associa esse número exatamente a essa família).
+ *
+ *   byte[0]: bit7=33 bit6=15 bit5=34 bit4=16 bit3=35 bit2=17  --  bit0=18
+ *   byte[1]: bit7=29 bit6=11 bit5=30 bit4=12 bit3=31 bit2=13 bit1=32 bit0=14
+ *   byte[2]: bit7=25 bit6=07 bit5=26 bit4=08 bit3=27 bit2=09 bit1=28 bit0=10
+ *   byte[3]: bit7=21 bit6=03 bit5=22 bit4=04 bit3=23 bit2=05 bit1=24 bit0=06
+ *   byte[4]:  --      --      --      --     bit3=19 bit2=01 bit1=20 bit0=02
+ *
+ * Se algum dia for preciso desenhar outro símbolo, é mais seguro
+ * recalcular pela tabela acima do que "chutar" por analogia.
+ * ------------------------------------------------------------------ */
+
+/*      . . # . .        */
+/*      . # # # .        */
+/*      . # # # .        */
+/*      . # # # .   SINO */
+/*      # # # # #        */
+/*      . . . . .        */
+/*      . . # . .        */
+static const uint8_t udc_sino[5] = { 0x85u, 0x15u, 0xD4u, 0xEAu, 0x08u };
+
+/*      . # # # .        */
+/*      . # . # .        */
+/*      . # # # .   GRAU */
+/*      . . . . .        */
+/*      . . . . .        */
+/*      . . . . .        */
+/*      . . . . .        */
+static const uint8_t udc_grau[5] = { 0x00u, 0x15u, 0x44u, 0x50u, 0x01u };
+
+/* Grava um caractere na posição 'codigo' (F6h..FFh) do charset.
+ *
+ * ATENÇÃO: este é um comando MULTIBYTE de 7 bytes, e o spec (seção 4.1,
+ * CAUTION) avisa que erro em comando multibyte faz o firmware do display
+ * "pular" para fora do modo de controle — foi exatamente o que travava o
+ * menu de brilho antes dos respiros. Daí os __delay_ms aqui.
+ *
+ * Se na bancada aparecer 'v' no lugar do sino, o display está truncando
+ * o bit 7 (F6h -> 76h = 'v'); nesse caso o spec oferece o código 17h
+ * ("Set Data Bit 7 High") como prefixo para o byte seguinte.          */
+static void vfd_definir_udc(uint8_t codigo, const uint8_t *pontos)
+{
+    uint8_t i;
+
+    UART_TX(VFD_CMD_DEFINIR_UDC);
+    UART_TX(codigo);
+    __delay_ms(VFD_ATRASO_POS_MS);      /* respiro após o cabeçalho    */
+    for (i = 0; i < 5u; i++) {
+        UART_TX(pontos[i]);
+    }
+    __delay_ms(VFD_ATRASO_POS_MS);      /* respiro antes do próximo cmd */
+}
 
 void vfd_iniciar(void)
 {
@@ -101,6 +175,12 @@ void vfd_iniciar(void)
      * DUAS linhas como um único fluxo de 40 caracteres a partir do topo,
      * deixando o auto-wrap encher a 2ª linha; como nunca se envia um 41º
      * caractere, a rolagem jamais é disparada. Ver vfd_quadro().       */
+
+    /* Grava os caracteres próprios. Tem de ser AQUI, DEPOIS do reset
+     * por software (14h) — o reset restaura modos e atributos padrão e
+     * apagaria as definições se elas viessem antes.                    */
+    vfd_definir_udc(VFD_CHAR_SINO, udc_sino);
+    vfd_definir_udc(VFD_CHAR_GRAU, udc_grau);
 }
 
 void vfd_limpar(void)

@@ -334,31 +334,39 @@ bool ds3231_alarme_reconhecer(void)
  *  ARMAZENAMENTO DE CONFIGURAÇÃO (registradores livres do Alarme 2)
  * ================================================================== */
 
-bool ds3231_config_gravar(uint8_t brilho)
+bool ds3231_config_gravar(uint8_t brilho, uint8_t so_dias_uteis)
 {
     bool ok;
 
     if (brilho > 7u) {
         brilho = 7u;                 /* mantém dentro da faixa válida  */
     }
+    so_dias_uteis = (so_dias_uteis != 0u) ? 1u : 0u;
 
-    /* Escreve 0Bh (brilho) e 0Ch (validade) em rajada. NÃO toca no
-     * controle (0Eh), então A2IE continua 0 e o Alarme 2 nunca dispara. */
+    /* Escreve 0Bh (brilho), 0Ch (validade) e 0Dh (modo) em rajada — o
+     * ponteiro do DS3231 auto-incrementa, então é UMA transação só.
+     *
+     * NÃO toca no controle (0Eh), então A1IE (habilitação do alarme) e
+     * A2IE ficam intactos. Escrever em 0Dh mexe nos bits A2M4/DY-DT do
+     * Alarme 2, o que é inofensivo: com A2IE = 0 esse alarme nunca
+     * aciona o pino INT, e o firmware jamais lê o flag A2F.            */
     i2c_start();
     ok  = i2c_escrever(DS3231_END_ESCRITA);
     ok &= i2c_escrever(DS3231_REG_CFG_BRILHO);
     ok &= i2c_escrever(brilho);              /* 0Bh                     */
     ok &= i2c_escrever(DS3231_CFG_MAGICO);   /* 0Ch                     */
+    ok &= i2c_escrever(so_dias_uteis);       /* 0Dh                     */
     i2c_stop();
 
     return ok;
 }
 
-bool ds3231_config_ler(uint8_t *brilho)
+bool ds3231_config_ler(uint8_t *brilho, uint8_t *so_dias_uteis)
 {
     bool ok;
     uint8_t valor;
     uint8_t validade;
+    uint8_t modo;
 
     i2c_start();
     ok  = i2c_escrever(DS3231_END_ESCRITA);
@@ -372,7 +380,8 @@ bool ds3231_config_ler(uint8_t *brilho)
     }
 
     valor    = i2c_ler(I2C_ACK);     /* 0Bh brilho                     */
-    validade = i2c_ler(I2C_NACK);    /* 0Ch marca de validade          */
+    validade = i2c_ler(I2C_ACK);     /* 0Ch marca de validade          */
+    modo     = i2c_ler(I2C_NACK);    /* 0Dh modo do alarme             */
     i2c_stop();
 
     /* Só confia no valor se a área já foi gravada por este firmware
@@ -382,5 +391,9 @@ bool ds3231_config_ler(uint8_t *brilho)
         return false;
     }
     *brilho = valor;
+    /* Qualquer coisa diferente de 1 vira "todos os dias": é o padrão
+     * seguro se o byte vier de uma gravação antiga (quando 0Dh ainda
+     * não era usado) ou corrompido.                                   */
+    *so_dias_uteis = (modo == 1u) ? 1u : 0u;
     return true;
 }

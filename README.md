@@ -9,8 +9,8 @@ instalar driver (o aparelho enumera como HID genérico).
 
 > Firmware em C (MPLAB XC8), escrito na forma canônica de projetos para
 > PIC: `board.h` central, um driver por periférico, documentação e
-> referência de datasheet em cada módulo. Compila em **90,6 %** da ROM
-> (7420/8192 words) e **89,8 %** da RAM (230/256 bytes) do PIC16C745.
+> referência de datasheet em cada módulo. Compila em **92,0 %** da ROM
+> (7536/8192 words) e **90,6 %** da RAM (232/256 bytes) do PIC16C745.
 
 ---
 
@@ -21,25 +21,45 @@ instalar driver (o aparelho enumera como HID genérico).
 - 🌡️ **Temperatura e umidade** com sensor **Sensirion SHT15**, incluindo
   verificação de **CRC-8** e conversão em **ponto fixo** (sem `float`,
   validada contra as fórmulas oficiais da Sensirion).
-- 🖥️ **Display VFD 20×2** em modo serial (19200 8N1), com telas que
-  alternam automaticamente (6 s hora / 4 s clima). As duas linhas são
-  escritas num único fluxo de 40 caracteres (auto-wrap), o que mantém a
-  2ª linha estável sem depender do comando de trava de rolagem.
+- 🖥️ **Display VFD 20×2** em modo serial (19200 8N1). A **linha de cima
+  é fixa com o horário** e o indicador de alarme; só a **linha de baixo
+  alterna** (6 s data / 4 s clima):
+
+  ```
+  |      14:35:27    U*|      * = sino (caractere próprio)
+  |   TER 16/07/2026   |   <-> |  23.4 °C  45.2 %RH |
+  ```
+
+  As duas linhas são escritas num único fluxo de 40 caracteres
+  (auto-wrap), o que mantém a 2ª linha estável sem depender do comando
+  de trava de rolagem.
+- 🔔 **Caracteres próprios**: o sino e o símbolo `°` são desenhados numa
+  matriz 5×7 e gravados no charset do display (posições `F6h`/`F7h`,
+  comando `18h`) durante o boot. Sobram 8 posições para símbolos futuros.
 - 🔌 **Acerto de hora por USB** (classe HID, **sem driver**): o firmware
   recebe a hora do PC e grava no DS3231. Todo o stack USB roda por
   interrupção, então o relógio nunca "trava" durante a comunicação.
-- ⏱️ **Alarme diário**, com horário configurável pelo PC
-  (`--alarme 07:30`) e liga/desliga também pelos botões. Fica guardado
-  nos registradores do **DS3231 alimentados pela bateria** — a única
-  memória não-volátil do projeto, já que o PIC16C745 é OTP e **não tem
-  EEPROM**. Aviso sonoro (buzzer) + mensagem piscando no display; ao
-  tocar, **qualquer botão silencia** (e rearma para o dia seguinte).
+- ⏱️ **Alarme diário em 3 estados**: desligado, **todos os dias** ou
+  **só em dias úteis** (seg–sex). O horário é configurável pelo PC
+  (`--alarme 07:30`) e o estado, pelos botões. Tudo fica nos
+  registradores do **DS3231 alimentados pela bateria** — a única memória
+  não-volátil do projeto, já que o PIC16C745 é OTP e **não tem EEPROM**.
+  Aviso sonoro (buzzer) + mensagem piscando no display; ao tocar,
+  **qualquer botão silencia** (e rearma para o dia seguinte).
+
+  > O filtro de dia útil é feito pelo firmware: o DS3231 só sabe casar
+  > *um* dia da semana específico, não "seg a sex". Ele dispara todo dia
+  > e o firmware, no fim de semana, reconhece o flag em silêncio.
+
+  O estado aparece direto na tela do relógio, nas duas últimas colunas
+  da linha de cima: **nada** (desligado), **sino** (todos os dias) ou
+  **`U`+sino** (dias úteis — *U* de dia Útil).
 - 🔘 **Menu de configuração por dois botões**: o **botão 1** abre o menu
   e percorre as opções (**alarme**, **brilho da tela**); o **botão 2**
-  altera a opção mostrada (liga/desliga o alarme; sobe o brilho até o
-  máximo e volta ao mínimo). Sem toque por alguns segundos, o menu fecha
-  e o carrossel volta. O alarme saiu do rodízio automático — só aparece
-  no menu ou quando dispara.
+  altera a opção mostrada — no alarme ele cicla os três estados
+  (desativado → todos os dias → dias úteis), e no brilho sobe até o
+  máximo e volta ao mínimo. Sem toque por alguns segundos, o menu fecha
+  e o carrossel volta.
 - 💓 **LED de heartbeat** (RA2): pisca a ~1 Hz enquanto o laço roda —
   sinal permanente de que o PIC está vivo, e um diagnóstico grátis (se
   congelar, algo travou). Fica em RA2 (não em RC0) porque o RC0 é o pino

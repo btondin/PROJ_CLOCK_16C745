@@ -218,7 +218,11 @@ escritas evita qualquer interferência de *read-modify-write*.
 | Botão | Ação |
 |---|---|
 | **1** (RA0) | **NAVEGAR**: abre o menu de configuração e percorre as opções (ALARME, BRILHO) |
-| **2** (RA1) | **ALTERAR**: muda o valor da opção mostrada (liga/desliga o alarme; sobe o brilho até o máximo e volta ao mínimo) |
+| **2** (RA1) | **ALTERAR**: muda o valor da opção mostrada. No **alarme**, cicla três estados: desativado → todos os dias → dias úteis. No **brilho**, sobe até o máximo e volta ao mínimo |
+
+O estado do alarme também fica visível na tela do relógio, nas duas
+últimas colunas da linha de cima: nada (desligado), **sino** (todos os
+dias) ou **`U`+sino** (só dias úteis).
 
 Com o alarme **tocando**, qualquer toque em qualquer botão silencia (e rearma
 para o dia seguinte) — a distinção curto/longo continua disponível no driver

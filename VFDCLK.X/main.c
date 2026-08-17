@@ -86,12 +86,12 @@
  * capturado corretamente com uma subtração de 16 bits.                 */
 #define TMR1_TICKS_POR_MS   750u
 
-/* Telas do CARROSSEL automático. Só hora e clima se alternam sozinhas;
- * o alarme SAIU do rodízio — agora é uma opção do menu de configuração
- * (ver tela_config e o tratamento dos botões no laço principal).      */
-#define TELA_HORA        0u
-#define TELA_CLIMA       1u
-#define CARROSSEL_TELAS  2u
+/* CARROSSEL: a linha de CIMA é fixa (horário + indicador de alarme) e
+ * só a linha de BAIXO se alterna. O alarme não entra no rodízio — é
+ * opção do menu de configuração (ver tela_config).                    */
+#define LINHA_DATA       0u   /* "   TER 16/07/2026   "                */
+#define LINHA_CLIMA      1u   /* "  23.4 °C  45.2 %RH "                */
+#define CARROSSEL_LINHAS 2u
 
 /* Opções do menu de configuração (botão 1 escolhe, botão 2 altera).
  * Estender é simples: acrescente uma opção aqui, trate-a no botão 2 e
@@ -154,6 +154,12 @@ static bool hora_valida  = false;          /* OSF limpo no DS3231?    */
 static uint8_t alarme_horas    = 0x07u;    /* BCD (padrão 07:00)      */
 static uint8_t alarme_minutos  = 0x00u;    /* BCD                     */
 static bool    alarme_ligado   = false;    /* espelho do bit A1IE     */
+/* Modo do alarme: false = toca todos os dias, true = só em dias úteis
+ * (segunda a sexta). Vive no registrador 0Dh do DS3231, separado do
+ * A1IE — por isso ligar/desligar o alarme pelo PC não perde o modo.
+ * O DS3231 não sabe filtrar "seg a sex" sozinho (o alarme dele casa um
+ * dia específico), então o filtro é aplicado aqui no disparo.         */
+static bool    alarme_so_uteis = false;
 static bool    alarme_tocando  = false;    /* disparou e não foi calado */
 static uint8_t alarme_segundos = 0;        /* há quanto tempo toca    */
 
@@ -251,9 +257,30 @@ static void linha_limpa(char *b)
  * reescreve só o dígito que mudou (vfd_campo_bcd), toda na 1ª linha.
  * ------------------------------------------------------------------ */
 
-/* Tela 1 — hora e data:  |      14:35:27      |
- *                        |   QUA 16/07/2026   |                      */
-static void tela_hora(bool completo)
+/* ------------------------------------------------------------------
+ * TELA PRINCIPAL
+ * ------------------------------------------------------------------
+ * A linha de CIMA é fixa — sempre o horário e o indicador de alarme:
+ *
+ *     |      14:35:27    U¤|      ¤ = sino (VFD_CHAR_SINO)
+ *      0     6      13   18 19
+ *
+ *   colunas 6..13 = HH:MM:SS. Essa posição NÃO pode mudar: a atualização
+ *   incremental dos segundos (vfd_campo_bcd(0, 12, ...)) depende dela.
+ *   col 18 = 'U' (de dia Útil) quando o alarme só toca de seg a sex
+ *   col 19 = sino quando o alarme está habilitado
+ *   alarme desligado -> as duas colunas ficam em branco
+ *
+ * A linha de BAIXO alterna entre duas variantes (o carrossel escolhe):
+ *
+ *   LINHA_DATA   |   TER 16/07/2026   |
+ *   LINHA_CLIMA  |  23.4 °C  45.2 %RH |
+ *
+ * Tudo é montado AQUI, sem funções auxiliares por linha, de propósito:
+ * cada nível de chamada economizado é margem na pilha de hardware de 8
+ * níveis, que o laço divide com a ISR do USB.
+ * ------------------------------------------------------------------ */
+static void tela_principal(bool completo, uint8_t linha_inf)
 {
     char b0[VFD_COLUNAS + 1];
     char b1[VFD_COLUNAS + 1];
@@ -284,13 +311,45 @@ static void tela_hora(bool completo)
 
     linha_limpa(b0);
     linha_limpa(b1);
+
+    /* ---- linha de cima: horário ---------------------------------- */
     if (rtc_presente) {
         por_bcd(&b0[6], hora_atual.horas);
         b0[8] = ':';
         por_bcd(&b0[9], hora_atual.minutos);
         b0[11] = ':';
         por_bcd(&b0[12], hora_atual.segundos);
+    } else {
+        /* RTC mudo no I2C: avisa em vez de mostrar lixo              */
+        por_texto(b0, 6, "SEM RTC");
+    }
 
+    /* ---- linha de cima: indicador de alarme (cols 18 e 19) -------- */
+    if (alarme_ligado) {
+        b0[19] = (char)VFD_CHAR_SINO;
+        if (alarme_so_uteis) {
+            b0[18] = 'U';
+        }
+    }
+
+    /* ---- linha de baixo: data OU clima --------------------------- */
+    if (linha_inf == LINHA_CLIMA) {
+        /* |  23.4 °C  45.2 %RH |  — números alinhados à direita
+         * terminando nas colunas 5 e 14, com espaço antes da unidade. */
+        if (ha_medida) {
+            por_decimos(&b1[5],  medida.temperatura_dC);
+            por_decimos(&b1[14], (int16_t)medida.umidade_dRH);
+        } else {
+            b1[2]  = '-'; b1[3]  = '-'; b1[4]  = '.'; b1[5]  = '-';
+            b1[11] = '-'; b1[12] = '-'; b1[13] = '.'; b1[14] = '-';
+        }
+        b1[7]  = (char)VFD_CHAR_GRAU;
+        b1[8]  = 'C';
+        b1[16] = '%';
+        b1[17] = 'R';
+        b1[18] = 'H';
+    } else if (rtc_presente) {
+        /* |   TER 16/07/2026   |                                     */
         if ((hora_atual.dia_semana >= 1u) && (hora_atual.dia_semana <= 7u)) {
             dia = nome_dia[hora_atual.dia_semana - 1u];
             b1[3] = dia[0]; b1[4] = dia[1]; b1[5] = dia[2];
@@ -301,49 +360,22 @@ static void tela_hora(bool completo)
         b1[12] = '/';
         b1[13] = '2'; b1[14] = '0';          /* século 20xx assumido    */
         por_bcd(&b1[15], hora_atual.ano);
-    } else {
-        /* RTC mudo no I2C: avisa em vez de mostrar lixo              */
-        por_texto(b0, 6, "SEM RTC");
     }
-    vfd_quadro(b0, b1);
-}
-
-/* Tela 2 — clima:  |  TEMP:   23.4 C    |
- *                  |  UMID:   45.2 %    |                            */
-static void tela_clima(void)
-{
-    char b0[VFD_COLUNAS + 1];
-    char b1[VFD_COLUNAS + 1];
-
-    linha_limpa(b0);
-    linha_limpa(b1);
-
-    por_texto(b0, 2, "TEMP:");
-    if (ha_medida) {
-        por_decimos(&b0[13], medida.temperatura_dC);
-    } else {
-        b0[10] = '-'; b0[11] = '-'; b0[12] = '.'; b0[13] = '-';
-    }
-    b0[15] = 'C';
-
-    por_texto(b1, 2, "UMID:");
-    if (ha_medida) {
-        por_decimos(&b1[13], (int16_t)medida.umidade_dRH);
-    } else {
-        b1[10] = '-'; b1[11] = '-'; b1[12] = '.'; b1[13] = '-';
-    }
-    b1[15] = '%';
 
     vfd_quadro(b0, b1);
 }
 
 /* Menu de configuração (botão 1 escolhe a opção, botão 2 altera).
  *   CFG_ALARME:  |  ALARME       07:00|
- *               |      ATIVADO       | / |     DESATIVADO     |
+ *               |     DESATIVADO     |  ou  |    TODOS OS DIAS   |
+ *                                     ou    |     DIAS UTEIS     |
  *   CFG_BRILHO:  |   BRILHO DA TELA   |
  *               |      NIVEL 8       |  (8 = mais claro ... 1 = escuro)
- * "ATIVADO/DESATIVADO" (e não "LIGADO/DESLIGADO") deixa claro que se
- * refere ao ALARME habilitado, não à energia do aparelho.            */
+ *
+ * O botão 2 sobre CFG_ALARME percorre os TRÊS estados em ciclo, que são
+ * os mesmos três que o indicador da tela principal mostra (nada / sino /
+ * U+sino). "DESATIVADO" (e não "DESLIGADO") deixa claro que se refere ao
+ * ALARME, não à energia do aparelho.                                  */
 static void tela_config(uint8_t opcao)
 {
     char b0[VFD_COLUNAS + 1];
@@ -358,10 +390,12 @@ static void tela_config(uint8_t opcao)
         por_bcd(&b0[14], alarme_horas);
         b0[16] = ':';
         por_bcd(&b0[17], alarme_minutos);
-        if (alarme_ligado) {
-            por_texto(b1, 6, "ATIVADO");
-        } else {
+        if (!alarme_ligado) {
             por_texto(b1, 5, "DESATIVADO");
+        } else if (alarme_so_uteis) {
+            por_texto(b1, 5, "DIAS UTEIS");
+        } else {
+            por_texto(b1, 3, "TODOS OS DIAS");
         }
     } else {   /* CFG_BRILHO */
         por_texto(b0, 3, "BRILHO DA TELA");
@@ -478,15 +512,15 @@ static bool acerto_valido(const uint8_t a[USB_TAM_REPORT])
 void main(void)
 {
     uint8_t seg_anterior   = 0xFFu;  /* força 1º redesenho            */
-    uint8_t cont_tela      = 0;      /* segundos na tela corrente     */
-    uint8_t tela           = TELA_HORA;            /* tela ativa      */
+    uint8_t cont_tela      = 0;      /* segundos na variante corrente */
+    uint8_t linha_inf      = LINHA_DATA;  /* variante da linha de baixo */
     uint8_t cont_sht       = SHT_PERIODO_SEGUNDOS; /* mede já no boot */
     uint8_t cont_msg_sync  = 0;      /* aviso de sincronização        */
     uint16_t tmr1_ant      = 0;      /* última leitura do TMR1 (base tempo) */
     uint16_t acum_ticks    = 0;      /* ticks do TMR1 acumulados (<750/ms)  */
     uint16_t fase_ms       = 0;      /* fase 0..499 ms do bipe/pisca alarme */
     bool    redesenhar     = false;  /* forçado por botão/comando     */
-    uint8_t tela_desenhada = 0xFFu;  /* qual tela está pintada        */
+    uint8_t tela_desenhada = 0xFFu;  /* qual variante está pintada     */
     uint8_t hb_contador    = 0;      /* divisor do heartbeat (LED)    */
     bool    hb_estado      = false;  /* estado atual do LED           */
     uint16_t cont_refresco = 0;      /* segundos até o refresco total */
@@ -500,8 +534,8 @@ void main(void)
     uint8_t acerto[USB_TAM_REPORT];
     uint8_t estado[USB_TAM_REPORT];  /* report montado a cada tick    */
 
-    /* Duração de cada tela no carrossel automático (índice = tela)   */
-    static const uint8_t tela_duracao[CARROSSEL_TELAS] = {
+    /* Duração de cada variante da linha de baixo (índice = variante) */
+    static const uint8_t tela_duracao[CARROSSEL_LINHAS] = {
         TELA_HORA_SEGUNDOS, TELA_CLIMA_SEGUNDOS
     };
 
@@ -526,12 +560,16 @@ void main(void)
     /* O display exige 500 ms de power-up (a espera está dentro de
      * vfd_iniciar); a enumeração USB acontece durante essa espera.   */
     vfd_iniciar();
-    /* Restaura o brilho salvo (área de config do DS3231); se nunca foi
-     * gravado, brilho_nivel mantém o padrão (BRILHO_PADRAO).          */
+    /* Restaura brilho e modo do alarme (área de config do DS3231); se
+     * nunca foi gravada, ficam os padrões (BRILHO_PADRAO / todos os dias).
+     * O modo vem separado da habilitação: quem diz se o alarme está
+     * LIGADO é o bit A1IE, lido logo abaixo por ds3231_alarme_ler().    */
     {
         uint8_t b;
-        if (ds3231_config_ler(&b)) {
-            brilho_nivel = b;
+        uint8_t uteis;
+        if (ds3231_config_ler(&b, &uteis)) {
+            brilho_nivel    = b;
+            alarme_so_uteis = (uteis != 0u);
         }
     }
     vfd_brilho(brilho_nivel);
@@ -591,8 +629,20 @@ void main(void)
                 opcao_config = CFG_ALARME;
             }
             if (opcao_config == CFG_ALARME) {
-                alarme_ligado = !alarme_ligado;
+                /* Ciclo de TRÊS estados, os mesmos que o indicador da
+                 * tela principal mostra:
+                 *   desligado -> todos os dias -> dias úteis -> desligado
+                 * A habilitação mora no A1IE do RTC; o modo, no reg 0Dh. */
+                if (!alarme_ligado) {
+                    alarme_ligado   = true;      /* -> todos os dias    */
+                    alarme_so_uteis = false;
+                } else if (!alarme_so_uteis) {
+                    alarme_so_uteis = true;      /* -> dias úteis       */
+                } else {
+                    alarme_ligado   = false;     /* -> desligado        */
+                }
                 (void)ds3231_alarme_habilitar(alarme_ligado);
+                (void)ds3231_config_gravar(brilho_nivel, alarme_so_uteis);
             } else {   /* CFG_BRILHO: sobe o brilho; do máximo, volta ao
                         * mínimo. Hardware 0 = máx.; subir brilho = N--. */
                 if (brilho_nivel == VFD_BRILHO_MAXIMO) {
@@ -603,7 +653,7 @@ void main(void)
                 vfd_brilho(brilho_nivel);
                 /* Persiste na área de config do DS3231 (só quando muda,
                  * não a cada volta) para sobreviver ao desligamento.   */
-                (void)ds3231_config_gravar(brilho_nivel);
+                (void)ds3231_config_gravar(brilho_nivel, alarme_so_uteis);
             }
             cont_config = 0;
             redesenhar  = true;
@@ -725,22 +775,34 @@ void main(void)
 
             /* 2a) O alarme disparou? O flag A1F é LATCHED no DS3231,
              *     então basta consultá-lo 1x por segundo — nenhum
-             *     disparo se perde e o pino INT/SQW fica dispensável. */
+             *     disparo se perde e o pino INT/SQW fica dispensável.
+             *
+             *     FILTRO DE DIA ÚTIL: o DS3231 não sabe casar "seg a
+             *     sex" (o alarme dele casa UM dia específico), então ele
+             *     dispara todo dia e quem decide é o firmware. No fim de
+             *     semana o flag é reconhecido em silêncio — o que também
+             *     rearma o alarme para o dia seguinte.
+             *     Convenção do projeto: 1 = segunda ... 7 = domingo.     */
             if (alarme_ligado && !alarme_tocando &&
                 ds3231_alarme_disparou()) {
-                alarme_tocando  = true;
-                alarme_segundos = 0;
-                /* Reinicia a fase do bipe/pisca para o 1º bipe sair
-                 * completo (200 ms), em vez de começar no meio do período. */
-                fase_ms    = 0;
-                acum_ticks = 0;
-                /* O alarme toma a tela: fecha um menu meio-editado e zera
-                 * um aviso de sync pendente, para o retorno (ao silenciar)
-                 * ser limpo ao relógio. Os botões só silenciam enquanto
-                 * toca (bloco 0a), então nada é alterado por engano.     */
-                modo_config   = false;
-                cont_config   = 0;
-                cont_msg_sync = 0;
+                if (alarme_so_uteis && (hora_atual.dia_semana > 5u)) {
+                    (void)ds3231_alarme_reconhecer();   /* sábado/domingo */
+                } else {
+                    alarme_tocando  = true;
+                    alarme_segundos = 0;
+                    /* Reinicia a fase do bipe/pisca para o 1º bipe sair
+                     * completo (200 ms), em vez de começar no meio.      */
+                    fase_ms    = 0;
+                    acum_ticks = 0;
+                    /* O alarme toma a tela: fecha um menu meio-editado e
+                     * zera um aviso de sync pendente, para o retorno (ao
+                     * silenciar) ser limpo ao relógio. Os botões só
+                     * silenciam enquanto toca (bloco 0a), então nada é
+                     * alterado por engano.                              */
+                    modo_config   = false;
+                    cont_config   = 0;
+                    cont_msg_sync = 0;
+                }
             }
 
             /* 2b) Segurança: para de tocar sozinho após alguns
@@ -806,21 +868,21 @@ void main(void)
                     bool completo = redesenhar;
 
                     cont_tela++;
-                    if (cont_tela >= tela_duracao[tela]) {
-                        tela = (uint8_t)((tela + 1u) % CARROSSEL_TELAS);
+                    if (cont_tela >= tela_duracao[linha_inf]) {
+                        linha_inf = (uint8_t)((linha_inf + 1u)
+                                              % CARROSSEL_LINHAS);
                         cont_tela = 0;
                     }
-                    if (tela != tela_desenhada) {
-                        tela_desenhada = tela;
-                        completo = true;     /* mudou de tela: repinta */
+                    if (linha_inf != tela_desenhada) {
+                        tela_desenhada = linha_inf;
+                        completo = true;  /* trocou a linha de baixo:
+                                           * repinta o quadro inteiro   */
                     }
 
-                    if (tela == TELA_CLIMA) {
-                        if (completo) {
-                            tela_clima();    /* valores mudam a cada 30 s */
-                        }
-                    } else if (hora_valida) {
-                        tela_hora(completo); /* só os dígitos, se possível */
+                    if (hora_valida) {
+                        /* A linha de cima (hora + alarme) é sempre a
+                         * mesma; só a de baixo alterna.                */
+                        tela_principal(completo, linha_inf);
                     } else if (completo) {
                         tela_ajuste_pendente();
                     }
@@ -835,7 +897,7 @@ void main(void)
         } else if (!rtc_presente && (seg_anterior != 0xFEu)) {
             /* RTC sumiu do barramento: mostra o aviso uma única vez  */
             seg_anterior = 0xFEu;
-            tela_hora(true);
+            tela_principal(true, linha_inf);
         } else if (redesenhar) {
             /* Botão/comando pediu redesenho fora do tick de 1 s:
              * responde na hora, para a resposta parecer instantânea.
@@ -845,11 +907,9 @@ void main(void)
                 if (modo_config) {
                     tela_config(opcao_config);
                 } else {
-                    tela_desenhada = tela;
-                    if (tela == TELA_CLIMA) {
-                        tela_clima();
-                    } else if (hora_valida) {
-                        tela_hora(true);
+                    tela_desenhada = linha_inf;
+                    if (hora_valida) {
+                        tela_principal(true, linha_inf);
                     } else {
                         tela_ajuste_pendente();
                     }
