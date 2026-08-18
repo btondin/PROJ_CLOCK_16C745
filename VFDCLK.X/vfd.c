@@ -40,8 +40,6 @@
 #define VFD_CMD_POSICIONAR      0x1Bu
 #define VFD_CMD_PREFIXO_A0      0x19u   /* A0=1 só para o próximo byte */
 
-#define VFD_CMD_DEFINIR_UDC     0x18u   /* define caractere (7 bytes)  */
-
 /* Códigos de controle com A0 alto (seção 4.5, exigem prefixo 19h)    */
 #define VFD_CMD_BRILHO          0x30u
 #define VFD_BRILHO_TODAS_COLS   0xFFu
@@ -68,91 +66,6 @@
         UART_TX(VFD_CMD_POSICIONAR);              \
         UART_TX((uint8_t)(pos));                  \
         __delay_ms(VFD_ATRASO_POS_MS);            \
-    } while (0)
-
-/* ------------------------------------------------------------------
- * CARACTERES DEFINIDOS PELO USUÁRIO (spec 4.3, comando 18h)
- * ------------------------------------------------------------------
- * O caractere é uma matriz de 5 colunas x 7 linhas, com as posições
- * numeradas da esquerda p/ direita, de cima p/ baixo:
- *
- *      1  2  3  4  5
- *      6  7  8  9 10
- *     11 12 13 14 15
- *     16 17 18 19 20
- *     21 22 23 24 25
- *     26 27 28 29 30
- *     31 32 33 34 35
- *
- * O comando leva 5 bytes de "dot data", mas o mapeamento ponto->bit é
- * INTERCALADO e, pior, MUDA conforme o modelo do display. A tabela 4-1
- * do spec traz duas variantes; a usada aqui é a dos modelos
- * 036X2-100/-105/-122/-124/-130/-134 — confirmada neste aparelho pelo
- * self-test, que devolveu "S/W NUMBER 35062-01" (o spec, seção 4.4,
- * associa esse número exatamente a essa família).
- *
- *   byte[0]: bit7=33 bit6=15 bit5=34 bit4=16 bit3=35 bit2=17  --  bit0=18
- *   byte[1]: bit7=29 bit6=11 bit5=30 bit4=12 bit3=31 bit2=13 bit1=32 bit0=14
- *   byte[2]: bit7=25 bit6=07 bit5=26 bit4=08 bit3=27 bit2=09 bit1=28 bit0=10
- *   byte[3]: bit7=21 bit6=03 bit5=22 bit4=04 bit3=23 bit2=05 bit1=24 bit0=06
- *   byte[4]:  --      --      --      --     bit3=19 bit2=01 bit1=20 bit0=02
- *
- * Se algum dia for preciso desenhar outro símbolo, é mais seguro
- * recalcular pela tabela acima do que "chutar" por analogia.
- * ------------------------------------------------------------------ */
-
-/* ------------------------------------------------------------------
- * VFD_DEFINIR_UDC — grava um caractere próprio (macro, NÃO função!)
- * ------------------------------------------------------------------
- * POR QUE MACRO, E COM BYTES LITERAIS: esta é a lição mais cara deste
- * arquivo. A versão anterior era uma função que recebia
- * `const uint8_t *pontos` e lia `pontos[i]` num laço. Isso parecia
- * inofensivo em C, mas no PIC16 midrange custava DOIS níveis de pilha:
- *
- *   1) a própria chamada da função, e
- *   2) um CALL INVISÍVEL no C — o núcleo de 14 bits não tem instrução
- *      de leitura de memória de programa, então um array `const` vira
- *      uma tabela RETLW no código, e lê-la através de um ponteiro exige
- *      CHAMAR essa tabela. No desmonte aparecia um "call" dentro da
- *      função, sem nenhum call no fonte.
- *
- * Somados aos 4 níveis que a ISR do USB usa, davam 8 — exatamente o
- * tamanho da pilha de hardware do PIC16C745. E como essa pilha é
- * CIRCULAR, o estouro não avisa: ele sobrescreve o endereço de retorno
- * mais antigo e o programa volta para lixo. O sintoma era o firmware
- * morrer no boot (nem o LED de heartbeat piscava), justamente porque a
- * enumeração USB acontece durante o vfd_iniciar.
- *
- * Como macro com literais, não há chamada nem tabela: o vfd_iniciar
- * volta a ser folha e a profundidade cai para 2 níveis.
- *
- * (No PIC18F2550 nada disso ocorre — ele tem TBLRD e 31 níveis — mas a
- *  macro é mantida igual nos dois projetos por simetria.)
- *
- * SOBRE A PAUSA NO MEIO DO COMANDO: a 1ª tentativa deste UDC punha um
- * __delay_ms entre o cabeçalho ("18 F6") e os 5 bytes de dados, e na
- * bancada o display executou os DADOS como comandos — o 15h limpou a
- * tela, o 44h imprimiu um 'D' na coluna 0 e o 01h ("Prepare to Read")
- * congelou o display. Por isso aqui os 7 bytes vão COLADOS, com o
- * respiro só no fim.
- *
- * Isso NÃO é uma regra geral do display: o comando de brilho
- * (vfd_brilho) tem um respiro no meio e funciona. Vale para este
- * comando; não generalize sem testar.
- *
- * Se na bancada aparecer 'v' no lugar do sino, o display está truncando
- * o bit 7 (F6h -> 76h = 'v'); nesse caso o spec oferece o código 17h
- * ("Set Data Bit 7 High") como prefixo para o byte seguinte.          */
-#define VFD_DEFINIR_UDC(codigo, p0, p1, p2, p3, p4)   \
-    do {                                              \
-        UART_TX(VFD_CMD_DEFINIR_UDC);                 \
-        UART_TX(codigo);                              \
-        UART_TX(p0);                                  \
-        UART_TX(p1);                                  \
-        UART_TX(p2);                                  \
-        UART_TX(p3);                                  \
-        UART_TX(p4);                                  \
-        __delay_ms(VFD_ATRASO_POS_MS);                \
     } while (0)
 
 void vfd_iniciar(void)
@@ -188,25 +101,6 @@ void vfd_iniciar(void)
      * DUAS linhas como um único fluxo de 40 caracteres a partir do topo,
      * deixando o auto-wrap encher a 2ª linha; como nunca se envia um 41º
      * caractere, a rolagem jamais é disparada. Ver vfd_quadro().       */
-
-    /* Grava os caracteres próprios. Tem de ser AQUI, DEPOIS do reset
-     * por software (14h) — o reset restaura modos e atributos padrão e
-     * apagaria as definições se elas viessem antes.
-     *
-     * Os padrões vão como LITERAIS (ver a nota na macro): array const
-     * custaria uma chamada escondida à tabela RETLW e estouraria a
-     * pilha de 8 níveis quando a ISR do USB entrasse no meio.
-     *
-     *   SINO             GRAU
-     *   . . # . .        . # # # .
-     *   . # # # .        . # . # .
-     *   . # # # .        . # # # .
-     *   . # # # .        . . . . .
-     *   # # # # #        . . . . .
-     *   . . . . .        . . . . .
-     *   . . # . .        . . . . .                                    */
-    VFD_DEFINIR_UDC(VFD_CHAR_SINO, 0x85u, 0x15u, 0xD4u, 0xEAu, 0x08u);
-    VFD_DEFINIR_UDC(VFD_CHAR_GRAU, 0x00u, 0x15u, 0x44u, 0x50u, 0x01u);
 }
 
 void vfd_limpar(void)

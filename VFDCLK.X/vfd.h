@@ -30,18 +30,6 @@
 #define VFD_BRILHO_MAXIMO   0u
 #define VFD_BRILHO_MINIMO   7u
 
-/* ------------------------------------------------------------------
- * CARACTERES DEFINIDOS PELO USUÁRIO (UDC)
- * ------------------------------------------------------------------
- * O 036X2 reserva as posições F6h..FFh do charset para 10 caracteres
- * desenhados por nós (spec 4.3, comando 18h). vfd_iniciar() grava os
- * dois abaixo no boot; depois é só enviá-los como se fossem letras.
- *
- * Restam livres F8h..FFh (8 posições) para símbolos futuros.
- * ------------------------------------------------------------------ */
-#define VFD_CHAR_SINO   0xF6u   /* sino: alarme habilitado            */
-#define VFD_CHAR_GRAU   0xF7u   /* símbolo de grau, para "°C"         */
-
 /* Reinicializa o display (reset por software) e o deixa limpo, com
  * cursor invisível e rolagem vertical padrão. Aguarda os 500 ms de
  * power-up exigidos pelo spec (seção 3.3) antes de falar com ele.    */
