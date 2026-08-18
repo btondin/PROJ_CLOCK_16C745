@@ -573,7 +573,9 @@ void main(void)
         }
     }
     vfd_brilho(brilho_nivel);
-    vfd_quadro("       VFDCLK", "      VER. 1.0");
+    /* Splash: nome + versão em cima, autor embaixo. Ambas as linhas
+     * centralizadas nas 20 colunas (vfd_quadro completa com espaços). */
+    vfd_quadro("  VFDCLK VER. 1.0", "    Bruno Tondin");
 
     hora_valida = ds3231_hora_valida();
     /* Recupera o alarme guardado na bateria do RTC (o PIC não tem

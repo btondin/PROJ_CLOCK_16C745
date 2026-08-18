@@ -101,46 +101,59 @@
  * recalcular pela tabela acima do que "chutar" por analogia.
  * ------------------------------------------------------------------ */
 
-/*      . . # . .        */
-/*      . # # # .        */
-/*      . # # # .        */
-/*      . # # # .   SINO */
-/*      # # # # #        */
-/*      . . . . .        */
-/*      . . # . .        */
-static const uint8_t udc_sino[5] = { 0x85u, 0x15u, 0xD4u, 0xEAu, 0x08u };
-
-/*      . # # # .        */
-/*      . # . # .        */
-/*      . # # # .   GRAU */
-/*      . . . . .        */
-/*      . . . . .        */
-/*      . . . . .        */
-/*      . . . . .        */
-static const uint8_t udc_grau[5] = { 0x00u, 0x15u, 0x44u, 0x50u, 0x01u };
-
-/* Grava um caractere na posição 'codigo' (F6h..FFh) do charset.
+/* ------------------------------------------------------------------
+ * VFD_DEFINIR_UDC — grava um caractere próprio (macro, NÃO função!)
+ * ------------------------------------------------------------------
+ * POR QUE MACRO, E COM BYTES LITERAIS: esta é a lição mais cara deste
+ * arquivo. A versão anterior era uma função que recebia
+ * `const uint8_t *pontos` e lia `pontos[i]` num laço. Isso parecia
+ * inofensivo em C, mas no PIC16 midrange custava DOIS níveis de pilha:
  *
- * ATENÇÃO: este é um comando MULTIBYTE de 7 bytes, e o spec (seção 4.1,
- * CAUTION) avisa que erro em comando multibyte faz o firmware do display
- * "pular" para fora do modo de controle — foi exatamente o que travava o
- * menu de brilho antes dos respiros. Daí os __delay_ms aqui.
+ *   1) a própria chamada da função, e
+ *   2) um CALL INVISÍVEL no C — o núcleo de 14 bits não tem instrução
+ *      de leitura de memória de programa, então um array `const` vira
+ *      uma tabela RETLW no código, e lê-la através de um ponteiro exige
+ *      CHAMAR essa tabela. No desmonte aparecia um "call" dentro da
+ *      função, sem nenhum call no fonte.
+ *
+ * Somados aos 4 níveis que a ISR do USB usa, davam 8 — exatamente o
+ * tamanho da pilha de hardware do PIC16C745. E como essa pilha é
+ * CIRCULAR, o estouro não avisa: ele sobrescreve o endereço de retorno
+ * mais antigo e o programa volta para lixo. O sintoma era o firmware
+ * morrer no boot (nem o LED de heartbeat piscava), justamente porque a
+ * enumeração USB acontece durante o vfd_iniciar.
+ *
+ * Como macro com literais, não há chamada nem tabela: o vfd_iniciar
+ * volta a ser folha e a profundidade cai para 2 níveis.
+ *
+ * (No PIC18F2550 nada disso ocorre — ele tem TBLRD e 31 níveis — mas a
+ *  macro é mantida igual nos dois projetos por simetria.)
+ *
+ * SOBRE A PAUSA NO MEIO DO COMANDO: a 1ª tentativa deste UDC punha um
+ * __delay_ms entre o cabeçalho ("18 F6") e os 5 bytes de dados, e na
+ * bancada o display executou os DADOS como comandos — o 15h limpou a
+ * tela, o 44h imprimiu um 'D' na coluna 0 e o 01h ("Prepare to Read")
+ * congelou o display. Por isso aqui os 7 bytes vão COLADOS, com o
+ * respiro só no fim.
+ *
+ * Isso NÃO é uma regra geral do display: o comando de brilho
+ * (vfd_brilho) tem um respiro no meio e funciona. Vale para este
+ * comando; não generalize sem testar.
  *
  * Se na bancada aparecer 'v' no lugar do sino, o display está truncando
  * o bit 7 (F6h -> 76h = 'v'); nesse caso o spec oferece o código 17h
  * ("Set Data Bit 7 High") como prefixo para o byte seguinte.          */
-static void vfd_definir_udc(uint8_t codigo, const uint8_t *pontos)
-{
-    uint8_t i;
-
-    UART_TX(VFD_CMD_DEFINIR_UDC);
-    UART_TX(codigo);
-    __delay_ms(VFD_ATRASO_POS_MS);      /* respiro após o cabeçalho    */
-    for (i = 0; i < 5u; i++) {
-        UART_TX(pontos[i]);
-    }
-    __delay_ms(VFD_ATRASO_POS_MS);      /* respiro antes do próximo cmd */
-}
+#define VFD_DEFINIR_UDC(codigo, p0, p1, p2, p3, p4)   \
+    do {                                              \
+        UART_TX(VFD_CMD_DEFINIR_UDC);                 \
+        UART_TX(codigo);                              \
+        UART_TX(p0);                                  \
+        UART_TX(p1);                                  \
+        UART_TX(p2);                                  \
+        UART_TX(p3);                                  \
+        UART_TX(p4);                                  \
+        __delay_ms(VFD_ATRASO_POS_MS);                \
+    } while (0)
 
 void vfd_iniciar(void)
 {
@@ -178,9 +191,22 @@ void vfd_iniciar(void)
 
     /* Grava os caracteres próprios. Tem de ser AQUI, DEPOIS do reset
      * por software (14h) — o reset restaura modos e atributos padrão e
-     * apagaria as definições se elas viessem antes.                    */
-    vfd_definir_udc(VFD_CHAR_SINO, udc_sino);
-    vfd_definir_udc(VFD_CHAR_GRAU, udc_grau);
+     * apagaria as definições se elas viessem antes.
+     *
+     * Os padrões vão como LITERAIS (ver a nota na macro): array const
+     * custaria uma chamada escondida à tabela RETLW e estouraria a
+     * pilha de 8 níveis quando a ISR do USB entrasse no meio.
+     *
+     *   SINO             GRAU
+     *   . . # . .        . # # # .
+     *   . # # # .        . # . # .
+     *   . # # # .        . # # # .
+     *   . # # # .        . . . . .
+     *   # # # # #        . . . . .
+     *   . . . . .        . . . . .
+     *   . . # . .        . . . . .                                    */
+    VFD_DEFINIR_UDC(VFD_CHAR_SINO, 0x85u, 0x15u, 0xD4u, 0xEAu, 0x08u);
+    VFD_DEFINIR_UDC(VFD_CHAR_GRAU, 0x00u, 0x15u, 0x44u, 0x50u, 0x01u);
 }
 
 void vfd_limpar(void)
