@@ -39,6 +39,7 @@
 #define VFD_CMD_HOME            0x16u   /* cursor ao início, sem limpar */
 #define VFD_CMD_POSICIONAR      0x1Bu
 #define VFD_CMD_PREFIXO_A0      0x19u   /* A0=1 só para o próximo byte */
+#define VFD_CMD_DEFINIR_UDC     0x18u   /* define caractere (7 bytes)  */
 
 /* Códigos de controle com A0 alto (seção 4.5, exigem prefixo 19h)    */
 #define VFD_CMD_BRILHO          0x30u
@@ -68,11 +69,55 @@
         __delay_ms(VFD_ATRASO_POS_MS);            \
     } while (0)
 
+/* ------------------------------------------------------------------
+ * VFD_DEFINIR_UDC — grava um caractere próprio. MACRO, não função.
+ * ------------------------------------------------------------------
+ * A versão natural seria uma função recebendo `const uint8_t *pontos`.
+ * No PIC16 de gama média isso sai caro e arriscado: não existe
+ * instrução de leitura da memória de programa, então um array `const`
+ * vira uma tabela RETLW e cada leitura por ponteiro emite um CALL
+ * ESCONDIDO — confirmado no desmonte deste projeto. Com a pilha de
+ * hardware de apenas 8 níveis, compartilhada com a ISR do USB, é um
+ * nível a mais que não se quer pagar. Como macro, os 7 bytes viram
+ * literais imediatos: nenhuma tabela, nenhum ponteiro, nenhum call.
+ * (No PIC18F2550 o TBLRD resolve isso e lá a função normal é usada.)
+ *
+ * Os 5 bytes de padrão seguem o mapeamento entrelaçado da matriz 5x7
+ * da tabela 4-1 do spec (família 35062-01) e são EXATAMENTE os mesmos
+ * que já funcionam no projeto do 2550 com este mesmo display — não
+ * mexer nos valores nem nos tempos.                                  */
+#define VFD_DEFINIR_UDC(codigo, p0, p1, p2, p3, p4)   \
+    do {                                              \
+        UART_TX(VFD_CMD_DEFINIR_UDC);                 \
+        UART_TX(codigo);                              \
+        __delay_ms(VFD_ATRASO_POS_MS);                \
+        UART_TX(p0);                                  \
+        UART_TX(p1);                                  \
+        UART_TX(p2);                                  \
+        UART_TX(p3);                                  \
+        UART_TX(p4);                                  \
+        __delay_ms(VFD_ATRASO_POS_MS);                \
+    } while (0)
+
+void vfd_definir_simbolos(void)
+{
+    /*   SINO            GRAU
+     *   ..X..           .XX..
+     *   .XXX.           X..X.
+     *   .XXX.           .XX..
+     *   XXXXX           .....
+     *   .....           .....
+     *   ..X..           .....
+     *   .....           .....                                        */
+    VFD_DEFINIR_UDC(VFD_CHAR_SINO, 0x85u, 0x15u, 0xD4u, 0xEAu, 0x08u);
+    VFD_DEFINIR_UDC(VFD_CHAR_GRAU, 0x00u, 0x15u, 0x44u, 0x50u, 0x01u);
+}
+
 void vfd_iniciar(void)
 {
     /* O spec (3.3) exige >= 500 ms após a alimentação antes do
      * primeiro comando ("Processor Power-up Cycle").                 */
-    __delay_ms(500);
+    ESPERAR_MS(500);
 
     /* Reset por software: tela limpa, cursor no início, modos padrão
      * (rolagem vertical, charset europeu, brilho máximo).
@@ -80,7 +125,7 @@ void vfd_iniciar(void)
      * folga larga: é uma operação única no boot, e um reset ainda em
      * curso engoliria os comandos seguintes.                         */
     UART_TX(VFD_CMD_RESET_SW);
-    __delay_ms(100);
+    ESPERAR_MS(100);
 
     /* Limpa e leva o cursor ao início (estado conhecido)             */
     UART_TX(VFD_CMD_LIMPAR_HOME);
@@ -127,7 +172,7 @@ void vfd_reafirmar(void)
 void vfd_cursor(uint8_t linha, uint8_t coluna)
 {
     /* Posições numeradas 0..39: linha 0 = 0..19, linha 1 = 20..39.   */
-    VFD_IR_PARA(linha * VFD_COLUNAS + coluna);
+    VFD_IR_PARA(coluna + ((linha != 0u) ? VFD_COLUNAS : 0u));
 }
 
 void vfd_escrever_char(char c)
@@ -232,7 +277,12 @@ void vfd_quadro_piscante(const char *linha0, const char *linha1, uint8_t taxa)
 
 void vfd_campo_bcd(uint8_t linha, uint8_t coluna, uint8_t novo, uint8_t antigo)
 {
-    uint8_t base = (uint8_t)(linha * VFD_COLUNAS + coluna);
+    /* linha * 20 escrito como (linha*16 + linha*4). A multiplicação
+     * normal chamaria ___bmul, e cada chamada custa um nível da pilha
+     * de hardware de 8 posições que o main divide com a ISR do USB —
+     * ver a nota de PROFUNDIDADE DE PILHA em main.c. Deslocamentos por
+     * constante viram instruções, não chamadas.                      */
+    uint8_t base = (uint8_t)(coluna + ((linha != 0u) ? VFD_COLUNAS : 0u));
 
     /* Reescreve SÓ os dígitos que realmente mudaram. Num relógio, de
      * um segundo para o outro quase sempre muda apenas a unidade dos

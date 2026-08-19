@@ -30,6 +30,22 @@
 #define VFD_BRILHO_MAXIMO   0u
 #define VFD_BRILHO_MINIMO   7u
 
+/* ------------------------------------------------------------------
+ * CARACTERES DEFINIDOS PELO USUÁRIO (UDC)
+ * ------------------------------------------------------------------
+ * O 036X2 permite redefinir posições altas da tabela (comando 18h,
+ * seção 4.4). Depois de definidos, basta escrever o código como se
+ * fosse um caractere normal — vfd_quadro() deixa passar tudo acima de
+ * 20h, então eles entram no fluxo das telas sem tratamento especial.
+ * ------------------------------------------------------------------ */
+#define VFD_CHAR_SINO   0xF6u   /* sino: alarme habilitado            */
+#define VFD_CHAR_GRAU   0xF7u   /* símbolo de grau, para "°C"         */
+
+/* Grava os dois caracteres acima no display. Tem de ser chamada DEPOIS
+ * de vfd_iniciar() — o reset por software (14h) restaura os modos
+ * padrão e apagaria as definições feitas antes dele.                  */
+void vfd_definir_simbolos(void);
+
 /* Reinicializa o display (reset por software) e o deixa limpo, com
  * cursor invisível e rolagem vertical padrão. Aguarda os 500 ms de
  * power-up exigidos pelo spec (seção 3.3) antes de falar com ele.    */

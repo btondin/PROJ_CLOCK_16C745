@@ -182,6 +182,31 @@ extern volatile uint8_t portb_sombra;
 #define LED_HB_LIGAR()      do { PORTAbits.RA2 = 1; } while (0)
 #define LED_HB_DESLIGAR()   do { PORTAbits.RA2 = 0; } while (0)
 
+/* ------------------------------------------------------------------
+ * ESPERAR_MS — espera longa que ALIMENTA O WATCHDOG
+ * ------------------------------------------------------------------
+ * Com o WDT ligado (WDTE=ON), __delay_ms() puro é perigoso: ele é uma
+ * espera cega, e qualquer espera acima do período do temporizador
+ * provoca um reset no meio do boot. O período nominal é 18 ms; com o
+ * prescaler em 1:128 (padrão de OPTION_REG após o reset: PSA=1,
+ * PS=111) dá ~2,3 s nominais, MAS a faixa do temporizador é de 7 a
+ * 33 ms — ou seja, o PIOR CASO é ~0,9 s. Toda espera acima disso tem
+ * de ser fatiada, e é o que esta macro faz: pedaços de 10 ms com um
+ * CLRWDT entre eles.
+ *
+ * É MACRO, não função: uma chamada custaria um nível da pilha de
+ * hardware de 8 posições, que o main divide com a ISR do USB.        */
+#define ESPERAR_MS(total)                         \
+    do {                                          \
+        uint16_t _restante = (uint16_t)(total);   \
+        while (_restante >= 10u) {                \
+            CLRWDT();                             \
+            __delay_ms(10);                       \
+            _restante -= 10u;                     \
+        }                                         \
+        CLRWDT();                                 \
+    } while (0)
+
 /* Inicialização dos pinos — implementada em main.c (chamada única).  */
 void board_iniciar_pinos(void);
 

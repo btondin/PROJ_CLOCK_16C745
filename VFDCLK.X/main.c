@@ -31,7 +31,7 @@
  *
  *  Bits de configuração (datasheet DS41124D, seção 12.1):
  *   FOSC=HS -> cristal HS de 24 MHz direto, sem PLL (o USB low-speed
- *              exige exatamente 24 MHz); WDT desligado; PWRT ligado.
+ *              exige exatamente 24 MHz); WDT LIGADO (auto-recuperação); PWRT ligado.
  * =====================================================================
  */
 #include <xc.h>
@@ -51,7 +51,7 @@
  * Bits de configuração (gravados junto com o programa)
  * ------------------------------------------------------------------ */
 #pragma config FOSC  = HS    /* cristal de 24 MHz (HS, sem PLL)       */
-#pragma config WDTE  = OFF   /* watchdog desligado                    */
+#pragma config WDTE  = ON    /* watchdog LIGADO: ver nota em ESPERAR_MS */
 #pragma config PWRTE = ON    /* power-up timer: alimentação estável   */
 #pragma config CP    = OFF   /* sem proteção de código                */
 
@@ -69,6 +69,30 @@
                                     * desalinhamento por ruído          */
 #define CONFIG_TIMEOUT_SEGUNDOS 8u /* menu fecha sozinho após ocioso   */
 #define BRILHO_PADRAO         VFD_BRILHO_MAXIMO
+
+/* ------------------------------------------------------------------
+ * CARACTERES PRÓPRIOS (sino e grau) — DESLIGADOS por ora
+ * ------------------------------------------------------------------
+ * O comando 18h ("Begin User Defined Character") está sendo RECUSADO
+ * por este módulo: o firmware manda 18h F6h + 5 bytes de padrão e o
+ * display, em vez de executar, imprime os bytes como texto — a tela
+ * rola (41º caractere) e sobra um 'D', que é o 44h do padrão do grau.
+ *
+ * O spec S036X2 explica a causa provável: as posições de UDC são
+ * F6h-FFh SOMENTE no modo de interface Intel/Motorola. No modo LCD
+ * (jumper "LCD" da barra de personalidade do módulo) existem apenas 4
+ * UDCs, nas posições 00h-03h, e F6h não é código válido — o comando é
+ * abortado e o resto vira texto, exatamente o sintoma observado.
+ *
+ * Para confirmar sem gravar nada: jumper SFTST no módulo + religar. O
+ * autoteste mostra "INTERFACE: INTEL(MOTOROLA)[LCD]" e, no fim, a
+ * fonte inteira do display — de onde pode sair um símbolo de grau
+ * pronto (faixa E0h-F2h, "Special Character Set", sempre presente),
+ * dispensando o UDC.
+ *
+ * Enquanto isso: '*' marca o alarme e o grau some, tudo em ASCII.
+ * Voltar para 1 quando o modo estiver confirmado.                    */
+#define USAR_SIMBOLOS_PROPRIOS  0
 
 /* Bipe do alarme e pisca sincronizado. Base de tempo REAL vinda do TMR1
  * (não das voltas do laço), então o ritmo não "engasga" quando uma volta
@@ -212,18 +236,37 @@ static void por_texto(char *b, uint8_t col, const char *s)
 
 /* Escreve um valor em décimos como "xx.d", alinhado à DIREITA,
  * terminando na posição 'fim' (ex.: -53 -> "-5.3").                  */
+/* As divisões por 10 são feitas por SUBTRAÇÃO REPETIDA, de propósito.
+ * Em 16 bits, "/" e "%" viram chamadas a ___lwdiv/___lwmod, e cada
+ * chamada custa um nível da pilha de hardware de 8 posições que o main
+ * divide com a ISR do USB (ver a nota de PROFUNDIDADE DE PILHA em
+ * main()). Os valores aqui são pequenos (décimos de grau e de %RH, no
+ * máximo 3 dígitos), então o custo em tempo é irrelevante: algumas
+ * dezenas de subtrações, uma vez a cada 30 s.                        */
 static void por_decimos(char *fim, int16_t valor)
 {
     bool negativo = (valor < 0);
     uint16_t v = negativo ? (uint16_t)(-valor) : (uint16_t)valor;
-    uint16_t inteiro = v / 10u;
+    uint8_t  inteiro = 0;            /* v/10 <= 100: cabe em 8 bits   */
+    uint8_t  q;
 
-    *fim-- = (char)('0' + (v % 10u));
+    while (v >= 10u) {               /* inteiro = v/10, v = v%10      */
+        v -= 10u;
+        inteiro++;
+    }
+    *fim-- = (char)('0' + (uint8_t)v);
     *fim-- = '.';
+
     do {
-        *fim-- = (char)('0' + (inteiro % 10u));
-        inteiro /= 10u;
+        q = 0;
+        while (inteiro >= 10u) {     /* q = inteiro/10, resto em inteiro */
+            inteiro -= 10u;
+            q++;
+        }
+        *fim-- = (char)('0' + (uint8_t)inteiro);
+        inteiro = q;
     } while (inteiro != 0u);
+
     if (negativo) {
         *fim = '-';
     }
@@ -304,6 +347,17 @@ static void tela_principal(bool completo, uint8_t inferior)
         por_texto(b0, 6, "SEM RTC");
     }
 
+    /* Sino na última coluna enquanto o alarme estiver habilitado. O
+     * relógio ocupa as colunas 6..13, então a direita está livre e o
+     * indicador fica visível nas duas telas do carrossel.            */
+    if (alarme_ligado) {
+#if USAR_SIMBOLOS_PROPRIOS
+        b0[19] = (char)VFD_CHAR_SINO;
+#else
+        b0[19] = '*';
+#endif
+    }
+
     /* ---- linha 1: o que estiver na vez do carrossel ---------------- */
     if (inferior == TELA_CLIMA) {
         if (ha_medida) {
@@ -314,7 +368,11 @@ static void tela_principal(bool completo, uint8_t inferior)
             b1[12] = '-'; b1[13] = '-'; b1[14] = '.'; b1[15] = '-';
         }
         /* Um espaço entre o número e a unidade, nos dois campos.     */
+#if USAR_SIMBOLOS_PROPRIOS
+        b1[6]  = (char)VFD_CHAR_GRAU; b1[7] = 'C';
+#else
         b1[6]  = 'C';
+#endif
         b1[17] = '%'; b1[18] = 'R'; b1[19] = 'H';
     } else if (rtc_presente) {
         if ((hora_atual.dia_semana >= 1u) && (hora_atual.dia_semana <= 7u)) {
@@ -398,20 +456,10 @@ static void tela_alarme_tocando(bool texto_visivel)
     vfd_quadro(b0, b1);
 }
 
-/* Aviso enquanto o RTC não tem hora confiável (OSF setado / nunca
- * sincronizado). NÃO detecta a conexão USB — sinaliza que a HORA está
- * inválida; a ação do usuário é rodar o app de acerto (DTCAPP). Por
- * isso a mensagem fala em "atualizar", não em "conectar".            */
-static void tela_ajuste_pendente(void)
-{
-    vfd_quadro("ATUALIZE HORA E DATA", "      PELO USB");
-}
-
-/* Confirmação após receber acerto pelo USB                           */
-static void tela_sincronizada(void)
-{
-    vfd_quadro("  HORA SINCRONIZADA", "      VIA USB");
-}
+/* As telas de aviso (hora inválida e confirmação de sincronismo) NÃO
+ * são funções: viraram chamadas diretas a vfd_quadro() dentro do laço.
+ * Cada função intermediária custa um nível da pilha de hardware de 8
+ * posições — ver a nota de PROFUNDIDADE DE PILHA em main().          */
 
 /* ------------------------------------------------------------------
  * Monta o report de estado para o host USB (função-FOLHA: quem envia
@@ -529,7 +577,7 @@ void main(void)
         }
     }
     vfd_brilho(brilho_nivel);
-    vfd_quadro("       VFDCLK", "      VER. 1.0");
+    vfd_quadro("  VFDCLK VER. 1.0", "    Bruno Tondin");
 
     hora_valida = ds3231_hora_valida();
     /* Recupera o alarme guardado na bateria do RTC (o PIC não tem
@@ -541,10 +589,27 @@ void main(void)
      * um alarme que já passou. Sem isto, ligar o relógio depois da
      * hora do alarme faria ele tocar imediatamente.                  */
     (void)ds3231_alarme_reconhecer();
-    __delay_ms(1000);                /* splash rapidinho              */
+    ESPERAR_MS(1000);                /* splash rapidinho              */
+
+    /* Caracteres próprios (sino e grau) por último, DEPOIS da splash e
+     * de propósito: se algo der errado neste comando, a splash já está
+     * na tela e o sintoma fica distinguível de uma falha anterior. É
+     * seguro aqui — o que exige o reset por software antes é a
+     * definição, e ele aconteceu lá atrás em vfd_iniciar().           */
+#if USAR_SIMBOLOS_PROPRIOS
+    vfd_definir_simbolos();
+#endif
 
     /* ---- laço principal ------------------------------------------- */
     for (;;) {
+        /* Alimenta o watchdog uma vez por volta. Se o laço travar por
+         * qualquer motivo (I2C preso, retorno corrompido, espera sem
+         * fim), o WDT reinicia o PIC em ~2,3 s e o relógio se recupera
+         * sozinho em vez de ficar morto na bancada. A volta mais lenta
+         * é a que mede o SHT15 (~0,4 s), bem abaixo do pior caso do
+         * temporizador (~0,9 s) — ver ESPERAR_MS em board.h.         */
+        CLRWDT();
+
         /* 0) Botões: o debounce conta voltas do laço (~50 ms cada),
          *    por isso botoes_processar() vem SEMPRE, uma vez por volta.
          *    Qualquer toque (curto ou longo) conta como um "clique".  */
@@ -670,7 +735,7 @@ void main(void)
                 if (ds3231_gravar(&nova)) {
                     hora_valida    = true;
                     cont_msg_sync  = MSG_SYNC_SEGUNDOS;
-                    tela_sincronizada();
+                    vfd_quadro("  HORA SINCRONIZADA", "      VIA USB");
                     seg_anterior   = 0xFFu;  /* redesenha ao sair     */
                     tela_desenhada = 0xFFu;
                 }
@@ -722,19 +787,33 @@ void main(void)
              *     disparo se perde e o pino INT/SQW fica dispensável. */
             if (alarme_ligado && !alarme_tocando &&
                 ds3231_alarme_disparou()) {
-                alarme_tocando  = true;
-                alarme_segundos = 0;
-                /* Reinicia a fase do bipe/pisca para o 1º bipe sair
-                 * completo (200 ms), em vez de começar no meio do período. */
-                fase_ms    = 0;
-                acum_ticks = 0;
-                /* O alarme toma a tela: fecha um menu meio-editado e zera
-                 * um aviso de sync pendente, para o retorno (ao silenciar)
-                 * ser limpo ao relógio. Os botões só silenciam enquanto
-                 * toca (bloco 0a), então nada é alterado por engano.     */
-                modo_config   = false;
-                cont_config   = 0;
-                cont_msg_sync = 0;
+                /* SOMENTE DIA ÚTIL, sempre — nesta versão do PIC16C745
+                 * não há opção de menu para isso: o alarme de despertador
+                 * é o único uso real e o espaço de programa é curto. O
+                 * DS3231 não sabe filtrar dia da semana no Alarme 1
+                 * (a máscara é "todo dia" ou "dia fixo"), então o filtro
+                 * é feito aqui: no fim de semana o disparo é apenas
+                 * reconhecido, o que rearma o alarme para o dia seguinte
+                 * sem tocar nada. Convenção do dia_semana (ver ds3231.h):
+                 * 1 = segunda ... 7 = domingo, logo 6 e 7 são sábado e
+                 * domingo.                                              */
+                if (hora_atual.dia_semana > 5u) {
+                    (void)ds3231_alarme_reconhecer();
+                } else {
+                    alarme_tocando  = true;
+                    alarme_segundos = 0;
+                    /* Reinicia a fase do bipe/pisca para o 1º bipe sair
+                     * completo (200 ms), em vez de começar no meio do período. */
+                    fase_ms    = 0;
+                    acum_ticks = 0;
+                    /* O alarme toma a tela: fecha um menu meio-editado e zera
+                     * um aviso de sync pendente, para o retorno (ao silenciar)
+                     * ser limpo ao relógio. Os botões só silenciam enquanto
+                     * toca (bloco 0a), então nada é alterado por engano.     */
+                    modo_config   = false;
+                    cont_config   = 0;
+                    cont_msg_sync = 0;
+                }
             }
 
             /* 2b) Segurança: para de tocar sozinho após alguns
@@ -763,6 +842,7 @@ void main(void)
                     cont_sht = SHT_PERIODO_SEGUNDOS;  /* segura sem estourar */
                 } else {
                     cont_sht = 0;
+                    CLRWDT();     /* medição bloqueia ~0,4 s */
                     if (sht1x_medir(&medida)) {
                         ha_medida  = true;
                         redesenhar = true;   /* valores novos na tela clima */
@@ -813,7 +893,7 @@ void main(void)
                         /* só os dígitos, se possível                  */
                         tela_principal(completo, tela);
                     } else if (completo) {
-                        tela_ajuste_pendente();
+                        vfd_quadro("ATUALIZE HORA E DATA", "      PELO USB");
                     }
                 }
             }
@@ -840,7 +920,7 @@ void main(void)
                     if (hora_valida) {
                         tela_principal(true, tela);
                     } else {
-                        tela_ajuste_pendente();
+                        vfd_quadro("ATUALIZE HORA E DATA", "      PELO USB");
                     }
                 }
             }
