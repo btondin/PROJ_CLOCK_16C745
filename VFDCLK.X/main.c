@@ -10,24 +10,34 @@
  *     a hora local e o firmware atualiza o RTC (dispositivo HID, sem
  *     driver). O stack USB roda inteiro por interrupção (usb_hid.c).
  *
+ *  A TELA (20x2): a LINHA DE CIMA é SEMPRE o relógio, com o sino na
+ *  última coluna quando o alarme está habilitado. Só a LINHA DE BAIXO
+ *  alterna, num carrossel de 6 s / 4 s:
+ *        14:35:27         (sempre)          14:35:27           F
+ *     QUA 16/07/2026                     23.4 °C     45.2 %RH
+ *
  *  ARQUITETURA DO LAÇO PRINCIPAL (cooperativo, sem RTOS):
  *   a cada ~50 ms lê o DS3231; quando o segundo vira:
- *     - redesenha a tela corrente (hora ou clima);
- *     - alterna o carrossel automático (6 s hora / 4 s clima);
+ *     - redesenha a tela (ou só os segundos, se nada mais mudou);
+ *     - alterna a linha de baixo do carrossel (6 s data / 4 s clima);
  *     - a cada 30 s dispara uma medição do SHT15 (bloqueante ~0,4 s;
  *       a ISR de USB continua atendendo o barramento normalmente);
  *     - atualiza o report de estado que o PC pode ler via USB.
  *   fora do tick, verifica os botões e se chegou acerto pelo USB.
  *
+ *  ALARME: dispara SOMENTE em dia útil (segunda a sexta), fixo — não há
+ *  opção de menu para isso. No fim de semana o disparo é apenas
+ *  reconhecido, o que rearma o alarme para o dia seguinte.
+ *
  *  INTERFACE DE BOTÕES (menu de configuração):
  *   - BOTÃO 1 (RA0) = NAVEGAR: abre o menu e percorre as opções
  *                     (por ora: ALARME e BRILHO). Nunca altera valor.
- *   - BOTÃO 2 (RA2) = ALTERAR: muda o valor da opção mostrada
+ *   - BOTÃO 2 (RA1) = ALTERAR: muda o valor da opção mostrada
  *                     (alarme liga/desliga; brilho sobe até o máximo e
  *                     volta ao mínimo). Fora do menu, o 1º toque já abre
  *                     no alarme e alterna, atendendo o gesto mais comum.
- *   Sem tocar em botão por alguns segundos, o menu fecha sozinho e o
- *   carrossel volta. Com o alarme TOCANDO, qualquer botão silencia.
+ *   Sem tocar em botão por 3 s, o menu fecha sozinho e o carrossel
+ *   volta. Com o alarme TOCANDO, qualquer botão silencia.
  *
  *  Bits de configuração (datasheet DS41124D, seção 12.1):
  *   FOSC=HS -> cristal HS de 24 MHz direto, sem PLL (o USB low-speed
@@ -67,32 +77,21 @@
                                     * (15 min): repõe cursor e reescreve
                                     * a tela toda, curando qualquer
                                     * desalinhamento por ruído          */
-#define CONFIG_TIMEOUT_SEGUNDOS 8u /* menu fecha sozinho após ocioso   */
+#define CONFIG_TIMEOUT_SEGUNDOS 3u /* menu fecha sozinho após ocioso   */
 #define BRILHO_PADRAO         VFD_BRILHO_MAXIMO
 
 /* ------------------------------------------------------------------
- * CARACTERES PRÓPRIOS (sino e grau) — DESLIGADOS por ora
+ * OS DOIS SÍMBOLOS DA TELA — vêm por caminhos DIFERENTES
  * ------------------------------------------------------------------
- * O comando 18h ("Begin User Defined Character") está sendo RECUSADO
- * por este módulo: o firmware manda 18h F6h + 5 bytes de padrão e o
- * display, em vez de executar, imprime os bytes como texto — a tela
- * rola (41º caractere) e sobra um 'D', que é o 44h do padrão do grau.
+ * GRAU: é caractere NATIVO da fonte deste módulo, em B9h. Foi
+ * localizado na bancada varrendo a tabela do display. Entra no fluxo
+ * como qualquer letra, sem comando nenhum — ver VFD_CHAR_GRAU_NATIVO.
  *
- * O spec S036X2 explica a causa provável: as posições de UDC são
- * F6h-FFh SOMENTE no modo de interface Intel/Motorola. No modo LCD
- * (jumper "LCD" da barra de personalidade do módulo) existem apenas 4
- * UDCs, nas posições 00h-03h, e F6h não é código válido — o comando é
- * abortado e o resto vira texto, exatamente o sintoma observado.
- *
- * Para confirmar sem gravar nada: jumper SFTST no módulo + religar. O
- * autoteste mostra "INTERFACE: INTEL(MOTOROLA)[LCD]" e, no fim, a
- * fonte inteira do display — de onde pode sair um símbolo de grau
- * pronto (faixa E0h-F2h, "Special Character Set", sempre presente),
- * dispensando o UDC.
- *
- * Enquanto isso: '*' marca o alarme e o grau some, tudo em ASCII.
- * Voltar para 1 quando o modo estiver confirmado.                    */
-#define USAR_SIMBOLOS_PROPRIOS  0
+ * SINO: não existe na fonte, então é DESENHADO com o comando 18h e
+ * guardado no slot F6h. A gravação acontece dentro de vfd_iniciar(),
+ * com o mesmo código que funciona no projeto do PIC18F2550 — ver a
+ * nota longa em vfd.c. O interruptor USAR_SIMBOLOS_PROPRIOS (vfd.h)
+ * troca o sino por '*' se for preciso isolar esse comando.           */
 
 /* Bipe do alarme e pisca sincronizado. Base de tempo REAL vinda do TMR1
  * (não das voltas do laço), então o ritmo não "engasga" quando uma volta
@@ -368,11 +367,9 @@ static void tela_principal(bool completo, uint8_t inferior)
             b1[12] = '-'; b1[13] = '-'; b1[14] = '.'; b1[15] = '-';
         }
         /* Um espaço entre o número e a unidade, nos dois campos.     */
-#if USAR_SIMBOLOS_PROPRIOS
-        b1[6]  = (char)VFD_CHAR_GRAU; b1[7] = 'C';
-#else
-        b1[6]  = 'C';
-#endif
+        /* Grau vindo da fonte NATIVA do display (B9h), não de UDC —
+         * ver nota em vfd.h.                                         */
+        b1[6]  = (char)VFD_CHAR_GRAU_NATIVO; b1[7] = 'C';
         b1[17] = '%'; b1[18] = 'R'; b1[19] = 'H';
     } else if (rtc_presente) {
         if ((hora_atual.dia_semana >= 1u) && (hora_atual.dia_semana <= 7u)) {
@@ -568,6 +565,12 @@ void main(void)
     /* O display exige 500 ms de power-up (a espera está dentro de
      * vfd_iniciar); a enumeração USB acontece durante essa espera.   */
     vfd_iniciar();
+#if USAR_SIMBOLOS_PROPRIOS
+    /* Sino: logo após o reset por software do display (dentro de
+     * vfd_iniciar) e chamado DAQUI, não de lá — ver a nota de pilha
+     * em vfd.c.                                                       */
+    vfd_definir_sino();
+#endif
     /* Restaura o brilho salvo (área de config do DS3231); se nunca foi
      * gravado, brilho_nivel mantém o padrão (BRILHO_PADRAO).          */
     {
@@ -590,15 +593,6 @@ void main(void)
      * hora do alarme faria ele tocar imediatamente.                  */
     (void)ds3231_alarme_reconhecer();
     ESPERAR_MS(1000);                /* splash rapidinho              */
-
-    /* Caracteres próprios (sino e grau) por último, DEPOIS da splash e
-     * de propósito: se algo der errado neste comando, a splash já está
-     * na tela e o sintoma fica distinguível de uma falha anterior. É
-     * seguro aqui — o que exige o reset por software antes é a
-     * definição, e ele aconteceu lá atrás em vfd_iniciar().           */
-#if USAR_SIMBOLOS_PROPRIOS
-    vfd_definir_simbolos();
-#endif
 
     /* ---- laço principal ------------------------------------------- */
     for (;;) {

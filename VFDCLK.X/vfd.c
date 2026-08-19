@@ -70,47 +70,62 @@
     } while (0)
 
 /* ------------------------------------------------------------------
- * VFD_DEFINIR_UDC — grava um caractere próprio. MACRO, não função.
+ * CARACTERE PRÓPRIO (UDC) — o sino do indicador de alarme
  * ------------------------------------------------------------------
- * A versão natural seria uma função recebendo `const uint8_t *pontos`.
- * No PIC16 de gama média isso sai caro e arriscado: não existe
- * instrução de leitura da memória de programa, então um array `const`
- * vira uma tabela RETLW e cada leitura por ponteiro emite um CALL
- * ESCONDIDO — confirmado no desmonte deste projeto. Com a pilha de
- * hardware de apenas 8 níveis, compartilhada com a ISR do USB, é um
- * nível a mais que não se quer pagar. Como macro, os 7 bytes viram
- * literais imediatos: nenhuma tabela, nenhum ponteiro, nenhum call.
- * (No PIC18F2550 o TBLRD resolve isso e lá a função normal é usada.)
+ * Esta é, BYTE A BYTE, a implementação que já funcionou neste projeto
+ * (commit eba5cc2) e que funciona hoje no projeto do PIC18F2550 com
+ * ESTE MESMO display. Não "otimizar": não trocar o array por
+ * argumentos soltos, não mexer nos valores, não mexer nos tempos.
  *
- * Os 5 bytes de padrão seguem o mapeamento entrelaçado da matriz 5x7
- * da tabela 4-1 do spec (família 35062-01) e são EXATAMENTE os mesmos
- * que já funcionam no projeto do 2550 com este mesmo display — não
- * mexer nos valores nem nos tempos.                                  */
-#define VFD_DEFINIR_UDC(codigo, p0, p1, p2, p3, p4)   \
-    do {                                              \
-        UART_TX(VFD_CMD_DEFINIR_UDC);                 \
-        UART_TX(codigo);                              \
-        __delay_ms(VFD_ATRASO_POS_MS);                \
-        UART_TX(p0);                                  \
-        UART_TX(p1);                                  \
-        UART_TX(p2);                                  \
-        UART_TX(p3);                                  \
-        UART_TX(p4);                                  \
-        __delay_ms(VFD_ATRASO_POS_MS);                \
-    } while (0)
+ * Houve uma tentativa de transformar isto em MACRO com literais
+ * imediatos, para poupar um nível da pilha de hardware. Ela produziu
+ * um 'D' solto na tela e o comando partido. A suspeita é que a leitura
+ * de cada ponto do array (que no PIC16 vem de uma tabela RETLW) INSIRA
+ * UM INTERVALO entre os bytes, e que esse intervalo seja requisito, não
+ * acidente: o USART é duplo-buffer e, com literais, dois bytes saem
+ * emendados sem folga nenhuma.
+ *
+ * Os 5 bytes seguem o mapeamento entrelaçado da matriz 5x7 da tabela
+ * 4-1 do spec (família 35062-01).                                    */
 
-void vfd_definir_simbolos(void)
+/*      . . # . .        */
+/*      . # # # .        */
+/*      . # # # .        */
+/*      . # # # .   SINO */
+/*      # # # # #        */
+/*      . . . . .        */
+/*      . . # . .        */
+static const uint8_t udc_sino[5] = { 0x85u, 0x15u, 0xD4u, 0xEAu, 0x08u };
+
+/* Grava o sino no slot F6h do charset (comando 18h + código + 5 bytes).
+ *
+ * ATENÇÃO: este é um comando MULTIBYTE de 7 bytes, e o spec (seção 4.1,
+ * CAUTION) avisa que erro em comando multibyte faz o firmware do display
+ * "pular" para fora do modo de controle — foi exatamente o que travava o
+ * menu de brilho antes dos respiros. Daí os __delay_ms aqui.
+ *
+ * Se na bancada aparecer 'v' no lugar do sino, o display está truncando
+ * o bit 7 (F6h -> 76h = 'v'); nesse caso o spec oferece o código 17h
+ * ("Set Data Bit 7 High") como prefixo para o byte seguinte.
+ *
+ * PROFUNDIDADE DE PILHA: esta função é chamada DIRETAMENTE pelo main, e
+ * não de dentro de vfd_iniciar() como em eba5cc2. O fluxo de bytes é o
+ * mesmo — só muda quem chama. O motivo é medido: ler udc_sino[i] emite a
+ * chamada escondida para a tabela RETLW e, aninhada sob vfd_iniciar(),
+ * essa leitura batia EXATAMENTE nos 8 níveis da pilha de hardware, que é
+ * a condição que derrubava o firmware. Chamada do main ela fica em 7,
+ * com um nível de folga.                                              */
+void vfd_definir_sino(void)
 {
-    /*   SINO            GRAU
-     *   ..X..           .XX..
-     *   .XXX.           X..X.
-     *   .XXX.           .XX..
-     *   XXXXX           .....
-     *   .....           .....
-     *   ..X..           .....
-     *   .....           .....                                        */
-    VFD_DEFINIR_UDC(VFD_CHAR_SINO, 0x85u, 0x15u, 0xD4u, 0xEAu, 0x08u);
-    VFD_DEFINIR_UDC(VFD_CHAR_GRAU, 0x00u, 0x15u, 0x44u, 0x50u, 0x01u);
+    uint8_t i;
+
+    UART_TX(VFD_CMD_DEFINIR_UDC);
+    UART_TX(VFD_CHAR_SINO);
+    __delay_ms(VFD_ATRASO_POS_MS);      /* respiro após o cabeçalho    */
+    for (i = 0; i < 5u; i++) {
+        UART_TX(udc_sino[i]);
+    }
+    __delay_ms(VFD_ATRASO_POS_MS);      /* respiro antes do próximo cmd */
 }
 
 void vfd_iniciar(void)
@@ -146,6 +161,7 @@ void vfd_iniciar(void)
      * DUAS linhas como um único fluxo de 40 caracteres a partir do topo,
      * deixando o auto-wrap encher a 2ª linha; como nunca se envia um 41º
      * caractere, a rolagem jamais é disparada. Ver vfd_quadro().       */
+
 }
 
 void vfd_limpar(void)

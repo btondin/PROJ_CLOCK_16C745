@@ -39,12 +39,28 @@
  * 20h, então eles entram no fluxo das telas sem tratamento especial.
  * ------------------------------------------------------------------ */
 #define VFD_CHAR_SINO   0xF6u   /* sino: alarme habilitado            */
-#define VFD_CHAR_GRAU   0xF7u   /* símbolo de grau, para "°C"         */
 
-/* Grava os dois caracteres acima no display. Tem de ser chamada DEPOIS
- * de vfd_iniciar() — o reset por software (14h) restaura os modos
- * padrão e apagaria as definições feitas antes dele.                  */
-void vfd_definir_simbolos(void);
+/* Liga/desliga a gravação do sino no boot. Em 0, o indicador de alarme
+ * cai para '*' (ver main.c). Serve para isolar o comando 18h caso ele
+ * volte a dar problema — foi assim que o resto do firmware pôde ser
+ * depurado enquanto o sino estava fora.                              */
+#define USAR_SIMBOLOS_PROPRIOS  1
+
+/* ------------------------------------------------------------------
+ * CARACTERES NATIVOS DA FONTE deste módulo
+ * ------------------------------------------------------------------
+ * Estes NÃO são UDC: já existem na tabela do display, então não gastam
+ * um slot de caractere próprio nem um comando no boot. Foram
+ * localizados na bancada com um navegador de fonte temporário, que
+ * mostrava 16 códigos por vez e foi removido depois.
+ * ------------------------------------------------------------------ */
+#define VFD_CHAR_GRAU_NATIVO  0xB9u   /* símbolo de grau, para "°C"   */
+
+/* Grava o sino no charset do display. Chamar DEPOIS de vfd_iniciar():
+ * o reset por software (14h) restaura os modos padrão e apagaria a
+ * definição feita antes dele. É chamada pelo main, e não de dentro do
+ * vfd_iniciar(), por causa da pilha — ver a nota em vfd.c.           */
+void vfd_definir_sino(void);
 
 /* Reinicializa o display (reset por software) e o deixa limpo, com
  * cursor invisível e rolagem vertical padrão. Aguarda os 500 ms de

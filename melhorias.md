@@ -17,7 +17,7 @@ Status:
 
 > Validar no PIC: virada de minuto (#1), bipe+pisca do alarme (#2/#3), ciclar o
 > brilho sem travar (#4), alarme por cima do menu (#5), brilho após desligar/
-> religar (#6). Se o brilho ainda travar, conferir o LED de heartbeat (RC0):
+> religar (#6). Se o brilho ainda travar, conferir o LED de heartbeat (RA2):
 > piscando = display; congelado = PIC.
 
 ---
@@ -135,7 +135,7 @@ redesenho da tela (`vfd_quadro`) logo em seguida, sem nenhum atraso
 entre os dois, pode confundir o parser do display.
 
 **Primeiro passo de diagnóstico (barato, não precisa mexer em código):**
-quando travar de novo, observar se o **LED de heartbeat (RC0) continua
+quando travar de novo, observar se o **LED de heartbeat (RA2) continua
 piscando**. Se continuar piscando => o firmware está vivo, o problema é
 só no display (aponta para a Hipótese B). Se o LED também congelar =>
 o PIC travou de verdade (aponta para a Hipótese A — pilha estourada ou
